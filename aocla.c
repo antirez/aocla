@@ -43,23 +43,23 @@ typedef struct aproc {
 /* We have local vars, so we need a stack frame. We start with a top level
  * stack frame. Each time a procedure is called, we create a new stack frame
  * and free it once the procedure returns. */
-#define NUMVARS ('z'-'a'+1)
+#define AOCLA_NUMVARS ('z'-'a'+1)
 typedef struct stackframe {
-    obj *locals[NUMVARS];   /* Local var names are limited to a,b,c,...,z. */
-    int lstate[NUMVARS];    /* Local state. When a local is assigned, it's set
-                               to 1. If a local is pushed, it drops to zero
+    obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
+    int lstate[AOCLA_NUMVARS]; /* Local state. When a local is assigned, it's
+                               set to 1. If a local is pushed, it drops to zero
                                (but lcoals[N] will still be not NULL). So
                                next time it is pushed, we know that we need
                                to perform a deep copy of the object. */
 } stackframe;
 
 /* Interpreter state. */
-typedef struct ainterp {
+typedef struct aoclactx {
     size_t maxstack, sl;    /* Stack max len and stack current len. */
     obj **stack;
     aproc *proc;            /* Procedures. Lists bound to specific names. */
     stackframe *frame;      /* Stack frame with locals. */
-} ainterp;
+} aoclactx;
 
 /* ================================= Utils ================================== */
 
@@ -98,13 +98,30 @@ void freeobj(obj *o) {
     free(o);
 }
 
+/* Return true if the character 'c' is within the Aocla symbols charset. */
+int issymbol(int c) {
+    if (isalpha(c)) return 1;
+    switch(c) {
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    case '=':
+    case '?':
+    case '%':
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* Given the string 's' return the obj representing the list or
  * NULL on syntax error. '*next' is set to the next byte to parse, after
  * the current e was completely parsed. */
 obj *parseList(const char *s, const char **next) {
     obj *o = myalloc(sizeof(*o));
     while(isspace(s[0])) s++;
-    if (s[0] == '-' || isdigit(s[0])) {
+    if (s[0] == '-' || isdigit(s[0])) { /* Integer. */
         char buf[64];
         size_t len = 0;
         while((*s == '-' || isdigit(*s)) && len < sizeof(buf)-1)
@@ -114,7 +131,7 @@ obj *parseList(const char *s, const char **next) {
         o->i = atoi(buf);
         if (next) *next = s;
         return o;
-    } else if (s[0] == '[') {
+    } else if (s[0] == '[') {           /* List. */
         o->type = OBJ_TYPE_LIST;
         o->l.len = 0;
         o->l.ele = NULL;
@@ -140,12 +157,7 @@ obj *parseList(const char *s, const char **next) {
             o->l.ele[o->l.len++] = element;
             s = nextptr; /* Continue from first byte not parsed. */
 
-            while(isspace(s[0])) s++;
-            if (s[0] == ']') continue; /* Will be handled by the loop. */
-            if (s[0] == ',') {
-                s++;
-                continue; /* Parse next element. */
-            }
+            continue; /* Parse next element. */
 
             /* Syntax error. */
             freeobj(o);
@@ -154,23 +166,21 @@ obj *parseList(const char *s, const char **next) {
         /* Syntax error (list not closed). */
         freeobj(o);
         return NULL;
-    } else if (isalpha(s[0])) {
+    } else if (issymbol(s[0])) {         /* Symbol. */
         o->type = OBJ_TYPE_SYMBOL;
         const char *end = s;
-        while(isalpha(*end)) end++;
+        while(issymbol(*end)) end++;
         o->sym.len = end-s;
         char *dest = malloc(o->sym.len+1);
         o->sym.ptr = dest;
         memcpy(dest,s,o->sym.len);
         dest[o->sym.len] = 0;
         *next = end;
-    } else if (s[0] == '"') {
+    } else if (s[0] == '"') {           /* String. */
         printf("IMPLEMENT STRING PARSING\n");
         exit(1);
     } else {
-        /* In a serious program you don't printf() in the middle of
-         * a function. Just return NULL. */
-        fprintf(stderr,"Syntax error parsing '%s'\n", s);
+        /* Syntax error. */
         return NULL;
     }
     return o;
@@ -230,6 +240,9 @@ void printobj(obj *obj) {
     case OBJ_TYPE_INT:
         printf("%d",obj->i);
         break;
+    case OBJ_TYPE_SYMBOL:
+        printf("%s",obj->sym.ptr);
+        break;
     case OBJ_TYPE_LIST:
         printf("[");
         for (size_t j = 0; j < obj->l.len; j++) {
@@ -239,6 +252,43 @@ void printobj(obj *obj) {
         printf("]");
         break;
     }
+}
+
+/* ========================== Interpreter state ============================= */
+
+/* Create a new stack frame. */
+stackframe *newStackFrame(void) {
+    stackframe *sf = myalloc(sizeof(*sf));
+    memset(sf->locals,0,sizeof(sf->locals));
+    memset(sf->lstate,0,sizeof(sf->lstate));
+    return sf;
+}
+
+/* Free a stack frame. */
+void freeStackFrame(stackframe *sf) {
+    for (int j = 0; j < AOCLA_NUMVARS; j++)
+        if (sf->locals[j]) freeobj(sf->locals[j]);
+    free(sf);
+}
+
+#define AOCLA_STACK_MAX 256
+aoclactx *newInterpreter(void) {
+    aoclactx *i = myalloc(sizeof(*i));
+    i->maxstack = AOCLA_STACK_MAX;
+    i->sl = 0;
+    i->stack = myalloc(sizeof(obj*)*i->maxstack);
+    i->proc = NULL; /* That's a linked list. Starts empty. */
+    i->frame = newStackFrame();
+    return i;
+}
+
+/* ================================ Eval ==================================== */
+
+/* Evaluate the program in the list 'l' in the specified context 'ctx'. */
+void eval(aoclactx *ctx, obj *l) {
+    if (l->type != OBJ_TYPE_LIST) return;
+    printobj(l);
+    printf("\n");
 }
 
 /* ================================ CLI ===================================== */
@@ -261,7 +311,31 @@ int readLists(FILE *fp, obj **v, size_t vlen) {
     return idx;
 }
 
+/* Real Eval Print Loop. */
 void repl(void) {
+    char buf[1024];
+    aoclactx *ctx = newInterpreter();
+    while(1) {
+        printf("aocla> "); fflush(stdout);
+        if (fgets(buf,sizeof(buf)-2,stdin) == NULL) break;
+        size_t l = strlen(buf);
+        if (l && buf[l-1] == '\n') buf[--l] = 0;
+        if (l == 0) continue;
+
+        /* Aocla programs are Aocla lists, so when users just write
+         * in the REPL we need to surround with []. */
+        memmove(buf+1,buf,l);
+        buf[0] = '[';
+        buf[l+1] = ']';
+        buf[l+2] = 0;
+
+        obj *list = parseList(buf,NULL);
+        if (!list) {
+            printf("Syntax error\n");
+            continue;
+        }
+        eval(ctx,list);
+    }
 }
 
 void evalFile(const char *filename, char **argv, int argc) {
