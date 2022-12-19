@@ -52,6 +52,7 @@ typedef struct aproc {
 #define AOCLA_NUMVARS ('z'-'a'+1)
 typedef struct stackframe {
     obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
+    aproc *curproc;            /* Current procedure executing or NULL.  */
 } stackframe;
 
 /* Interpreter state. */
@@ -59,7 +60,7 @@ typedef struct stackframe {
 typedef struct aoclactx {
     size_t stacklen;        /* Stack current len. */
     obj **stack;
-    aproc *proc;            /* Procedures. Lists bound to specific names. */
+    aproc *proc;            /* Defined procedures. */
     stackframe *frame;      /* Stack frame with locals. */
     /* Syntax error context. */
     char errstr[ERRSTR_LEN]; /* Syntax error or execution error string. */
@@ -95,8 +96,8 @@ void *myrealloc(void *ptr, size_t size) {
 
 /* Recursively free an Aocla object, if the refcount just dropped to zero. */
 void release(obj *o) {
-    assert(o->refcount >= 0);
     if (o == NULL) return;
+    assert(o->refcount >= 0);
     if (--o->refcount == 0) {
         switch(o->type) {
         case OBJ_TYPE_INT: break; /* Nothing nested to free. */
@@ -295,7 +296,7 @@ obj *newObject(int type) {
     obj *o = myalloc(sizeof(*o));
     o->refcount = 1;
     o->type = type;
-    return 0;
+    return o;
 }
 
 /* Allocate an int object with value 'i'. */
@@ -310,13 +311,15 @@ obj *newInt(int i) {
 /* Set the syntax or runtime error, if the context is not NULL. */
 void setError(aoclactx *ctx, const char *ptr, const char *msg) {
     if (!ctx) return;
-    snprintf(ctx->errstr,ERRSTR_LEN,"%s: %.30s ...",msg,ptr);
+    snprintf(ctx->errstr,ERRSTR_LEN,"%s: %.30s%s",
+        msg,strlen(msg)>30 ? "..." :"", ptr);
 }
 
 /* Create a new stack frame. */
 stackframe *newStackFrame(void) {
     stackframe *sf = myalloc(sizeof(*sf));
     memset(sf->locals,0,sizeof(sf->locals));
+    sf->curproc = NULL;
     return sf;
 }
 
@@ -348,7 +351,8 @@ void stackPush(aoclactx *ctx, obj *o) {
  * Return NULL if stack is empty. */
 obj *stackPop(aoclactx *ctx) {
     if (ctx->stacklen == 0) {
-        setError(ctx,"","Out of stack");
+        setError(ctx,ctx->frame->curproc ? ctx->frame->curproc->name : "",
+            "Out of stack");
         return NULL;
     }
     return ctx->stack[--ctx->stacklen];
@@ -395,10 +399,20 @@ int eval(aoclactx *ctx, obj *l) {
                 return 1;
             }
             if (proc->cproc) {
+                /* Call a procedure implemented in C. */
+                aproc *prev = ctx->frame->curproc;
+                ctx->frame->curproc = proc;
                 int err = proc->cproc(o->sym.ptr,ctx);
+                ctx->frame->curproc = prev;
                 if (err) return err;
             } else {
+                /* Call a procedure implemented in Aocla. */
+                stackframe *oldsf = ctx->frame;
+                ctx->frame = newStackFrame();
+                ctx->frame->curproc = proc;
                 int err = eval(ctx,proc->proc);
+                freeStackFrame(ctx->frame);
+                ctx->frame = oldsf;
                 if (err) return err;
             }
             break;
