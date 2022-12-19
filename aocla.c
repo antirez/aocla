@@ -12,10 +12,12 @@
  * and so forth. */
 #define OBJ_TYPE_INT  0
 #define OBJ_TYPE_LIST 1
-#define OBJ_TYPE_STRING 2
-#define OBJ_TYPE_SYMBOL 3
+#define OBJ_TYPE_TUPLE 2
+#define OBJ_TYPE_STRING 3
+#define OBJ_TYPE_SYMBOL 4
 typedef struct obj {
     int type;       /* OBJ_TYPE_... */
+    int refcount;   /* Reference count. */
     union {
         int i;      /* Integer. Literal: 1234 */
         struct {    /* List: Literal: [1,2,3,4] or [1 2 3 4] */
@@ -40,7 +42,7 @@ struct aoclactx;
 typedef struct aproc {
     const char *name;
     obj *proc;      /* If not NULL it's an Aocla procedure (list object). */
-    void (cproc)(const char *, struct aoclactx *); /* C procedure. */
+    int (*cproc)(const char *, struct aoclactx *); /* C procedure. */
     struct aproc *next;
 } aproc;
 
@@ -50,20 +52,22 @@ typedef struct aproc {
 #define AOCLA_NUMVARS ('z'-'a'+1)
 typedef struct stackframe {
     obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
-    int lstate[AOCLA_NUMVARS]; /* Local state. When a local is assigned, it's
-                               set to 1. If a local is pushed, it drops to zero
-                               (but lcoals[N] will still be not NULL). So
-                               next time it is pushed, we know that we need
-                               to perform a deep copy of the object. */
 } stackframe;
 
 /* Interpreter state. */
+#define ERRSTR_LEN 128
 typedef struct aoclactx {
-    size_t maxstack, sl;    /* Stack max len and stack current len. */
+    size_t stacklen;        /* Stack current len. */
     obj **stack;
     aproc *proc;            /* Procedures. Lists bound to specific names. */
     stackframe *frame;      /* Stack frame with locals. */
+    /* Syntax error context. */
+    char errstr[ERRSTR_LEN]; /* Syntax error or execution error string. */
 } aoclactx;
+
+void setError(aoclactx *ctx, const char *ptr, const char *msg);
+aproc *lookupProc(aoclactx *ctx, const char *name);
+void loadLibrary(aoclactx *ctx);
 
 /* ================================= Utils ================================== */
 
@@ -89,17 +93,26 @@ void *myrealloc(void *ptr, size_t size) {
 
 /* =============================== Objects ================================== */
 
-/* Recursively free an Aocla object. */
-void freeobj(obj *o) {
-    switch(o->type) {
-    case OBJ_TYPE_INT: break; /* Nothing nested to free. */
-    case OBJ_TYPE_LIST:
-        for (size_t j = 0; j < o->l.len; j++)
-            freeobj(o->l.ele[j]);
-        free(o->l.ele);
-        break;
+/* Recursively free an Aocla object, if the refcount just dropped to zero. */
+void release(obj *o) {
+    assert(o->refcount >= 0);
+    if (o == NULL) return;
+    if (--o->refcount == 0) {
+        switch(o->type) {
+        case OBJ_TYPE_INT: break; /* Nothing nested to free. */
+        case OBJ_TYPE_LIST:
+            for (size_t j = 0; j < o->l.len; j++)
+                release(o->l.ele[j]);
+            free(o->l.ele);
+            break;
+        }
+        free(o);
     }
-    free(o);
+}
+
+/* Increment the object ref count. Use when a new reference is created. */
+void retain(obj *o) {
+    o->refcount++;
 }
 
 /* Return true if the character 'c' is within the Aocla symbols charset. */
@@ -121,9 +134,12 @@ int issymbol(int c) {
 
 /* Given the string 's' return the obj representing the list or
  * NULL on syntax error. '*next' is set to the next byte to parse, after
- * the current e was completely parsed. */
-obj *parseList(const char *s, const char **next) {
+ * the current e was completely parsed.
+ *
+ * Returned object has a ref count of 1. */
+obj *parseList(aoclactx *ctx, const char *s, const char **next) {
     obj *o = myalloc(sizeof(*o));
+    o->refcount = 1;
     while(isspace(s[0])) s++;
     if (s[0] == '-' || isdigit(s[0])) { /* Integer. */
         char buf[64];
@@ -135,7 +151,7 @@ obj *parseList(const char *s, const char **next) {
         o->i = atoi(buf);
         if (next) *next = s;
         return o;
-    } else if (s[0] == '[' || s[1] == '(') { /* List or Tuple. */
+    } else if (s[0] == '[' || s[0] == '(') { /* List or Tuple. */
         o->type = s[0] == '[' ? OBJ_TYPE_LIST : OBJ_TYPE_TUPLE;
         o->l.len = 0;
         o->l.ele = NULL;
@@ -146,24 +162,25 @@ obj *parseList(const char *s, const char **next) {
              * ASAP. */
             while(isspace(s[0])) s++;
             if ((o->type == OBJ_TYPE_LIST && s[0] == ']') ||
-                (p->type == OBJ_TYPE_TUPLE && s[0] == ')')) {
+                (o->type == OBJ_TYPE_TUPLE && s[0] == ')')) {
                 if (next) *next = s+1;
                 return o;
             }
 
             /* Parse the current sub-element recursively. */
             const char *nextptr;
-            obj *element = parseList(s,&nextptr);
+            obj *element = parseList(ctx,s,&nextptr);
             if (element == NULL) {
-                freeobj(o);
+                release(o);
                 return NULL;
             } else if (o->type == OBJ_TYPE_TUPLE &&
                        (element->type != OBJ_TYPE_SYMBOL ||
                         element->sym.len != 1))
             {
                 /* Tuples can be only composed of one character symbols. */
-                freeobj(element);
-                freeobj(o);
+                release(element);
+                release(o);
+                setError(ctx,s,"Non symbol object in tuple");
                 return NULL;
             }
             o->l.ele = myrealloc(o->l.ele, sizeof(obj*)*(o->l.len+1));
@@ -171,20 +188,17 @@ obj *parseList(const char *s, const char **next) {
             s = nextptr; /* Continue from first byte not parsed. */
 
             continue; /* Parse next element. */
-
-            /* Syntax error. */
-            freeobj(o);
-            return NULL;
         }
         /* Syntax error (list not closed). */
-        freeobj(o);
+        setError(ctx,s,"List never closed");
+        release(o);
         return NULL;
     } else if (issymbol(s[0])) {         /* Symbol. */
         o->type = OBJ_TYPE_SYMBOL;
         const char *end = s;
         while(issymbol(*end)) end++;
         o->sym.len = end-s;
-        char *dest = malloc(o->sym.len+1);
+        char *dest = myalloc(o->sym.len+1);
         o->sym.ptr = dest;
         memcpy(dest,s,o->sym.len);
         dest[o->sym.len] = 0;
@@ -194,6 +208,7 @@ obj *parseList(const char *s, const char **next) {
         exit(1);
     } else {
         /* Syntax error. */
+        setError(ctx,s,"No object type starts with this character");
         return NULL;
     }
     return o;
@@ -264,36 +279,138 @@ void printobj(obj *obj) {
         }
         printf("]");
         break;
+    case OBJ_TYPE_TUPLE:
+        printf("(");
+        for (size_t j = 0; j < obj->l.len; j++) {
+            printobj(obj->l.ele[j]);
+            if (j != obj->l.len-1) printf(", ");
+        }
+        printf(")");
+        break;
     }
 }
 
+/* Allocate a new object of type 'type. */
+obj *newObject(int type) {
+    obj *o = myalloc(sizeof(*o));
+    o->refcount = 1;
+    o->type = type;
+    return 0;
+}
+
+/* Allocate an int object with value 'i'. */
+obj *newInt(int i) {
+    obj *o = newObject(OBJ_TYPE_INT);
+    o->i = i;
+    return o;
+}
+
 /* ========================== Interpreter state ============================= */
+
+/* Set the syntax or runtime error, if the context is not NULL. */
+void setError(aoclactx *ctx, const char *ptr, const char *msg) {
+    if (!ctx) return;
+    snprintf(ctx->errstr,ERRSTR_LEN,"%s: %.30s ...",msg,ptr);
+}
 
 /* Create a new stack frame. */
 stackframe *newStackFrame(void) {
     stackframe *sf = myalloc(sizeof(*sf));
     memset(sf->locals,0,sizeof(sf->locals));
-    memset(sf->lstate,0,sizeof(sf->lstate));
     return sf;
 }
 
 /* Free a stack frame. */
 void freeStackFrame(stackframe *sf) {
     for (int j = 0; j < AOCLA_NUMVARS; j++)
-        if (sf->locals[j]) freeobj(sf->locals[j]);
+        if (sf->locals[j]) release(sf->locals[j]);
     free(sf);
 }
 
-#define AOCLA_STACK_MAX 256
 aoclactx *newInterpreter(void) {
     aoclactx *i = myalloc(sizeof(*i));
-    i->maxstack = AOCLA_STACK_MAX;
-    i->sl = 0;
-    i->stack = myalloc(sizeof(obj*)*i->maxstack);
+    i->stacklen = 0;
+    i->stack = NULL; /* Will be allocated on push of new elements. */
     i->proc = NULL; /* That's a linked list. Starts empty. */
     i->frame = newStackFrame();
+    loadLibrary(i);
     return i;
 }
+
+/* Push an object on the interpreter stack. No refcount change. */
+void stackPush(aoclactx *ctx, obj *o) {
+    ctx->stack = myrealloc(ctx->stack,sizeof(obj*) * (ctx->stacklen+1));
+    ctx->stack[ctx->stacklen++] = o;
+    retain(o);
+}
+
+/* Pop an object from the stack without modifying its refcount.
+ * Return NULL if stack is empty. */
+obj *stackPop(aoclactx *ctx) {
+    if (ctx->stacklen == 0) {
+        setError(ctx,"","Out of stack");
+        return NULL;
+    }
+    return ctx->stack[--ctx->stacklen];
+}
+
+/* Show the current content of the stack. */
+void stackShow(aoclactx *ctx) {
+    ssize_t j, max = 10;
+    for (j = ctx->stacklen-1; j >= 0 && max; j--, max--) {
+        printobj(ctx->stack[j]);
+        printf("\n");
+    }
+    if (j > 0) printf("[... %zu more object ...]", j);
+}
+
+/* ================================ Eval ==================================== */
+
+/* Evaluate the program in the list 'l' in the specified context 'ctx'.
+ * Expects a list object. Evaluation uses the following rules:
+ *
+ * 1. List elements are scanned from left to right.
+ * 2. If an element is a symbol, a function bound to such symbol is
+ *    searched and executed. If no function is found with such a name
+ *    an error is raised.
+ * 3. If an element is a tuple, the stack elements are captured into the
+ *    local variables with the same names as the tuple elements. If we
+ *    run out of stack, an error is raised.
+ * 4. Any other object type is just pushed on the stack.
+ *
+ * Return 1 on runtime erorr. Otherwise 0 is returned.
+ */
+int eval(aoclactx *ctx, obj *l) {
+    assert (l->type == OBJ_TYPE_LIST);
+
+    for (size_t j = 0; j < l->l.len; j++) {
+        obj *o = l->l.ele[j];
+        aproc *proc;
+
+        switch(o->type) {
+        case OBJ_TYPE_SYMBOL:
+            proc = lookupProc(ctx,o->sym.ptr);
+            if (proc == NULL) {
+                setError(ctx,o->sym.ptr,"Symbol not bound to procedure");
+                return 1;
+            }
+            if (proc->cproc) {
+                int err = proc->cproc(o->sym.ptr,ctx);
+                if (err) return err;
+            } else {
+                int err = eval(ctx,proc->proc);
+                if (err) return err;
+            }
+            break;
+        default:
+            stackPush(ctx,o);
+            break;
+        }
+    }
+    return 0;
+}
+
+/* ============================== Library =================================== */
 
 /* Search for a procedure with that name. Return NULL if not found. */
 aproc *lookupProc(aoclactx *ctx, const char *name) {
@@ -305,35 +422,60 @@ aproc *lookupProc(aoclactx *ctx, const char *name) {
     return NULL;
 }
 
-/* ================================ Eval ==================================== */
+/* Allocate a new procedure object and link it to 'ctx'.
+ * It's up to the caller to to fill the actual C or Aocla procedure pointer. */
+aproc *newProc(aoclactx *ctx, const char *name) {
+    aproc *ap = myalloc(sizeof(*ap));
+    ap->name = myalloc(strlen(name)+1);
+    memcpy((char*)ap->name,name,strlen(name)+1);
+    ap->next = ctx->proc;
+    ctx->proc = ap;
+    return ap;
+}
 
-/* Evaluate the program in the list 'l' in the specified context 'ctx'. */
-void eval(aoclactx *ctx, obj *l) {
-    assert (l->type == OBJ_TYPE_LIST);
+/* Add a procedure to the specified context. Either cproc or list should
+ * not be null. */
+void addProc(aoclactx *ctx, const char *name, int(*cproc)(const char *, aoclactx *), obj *list) {
+    assert((cproc != NULL) + (list != NULL) == 1);
+    aproc *ap = newProc(ctx,name);
+    ap->proc = list;
+    ap->cproc = cproc;
+}
 
-    printobj(l);
-    printf("\n");
+/* Implements +, -, *, %, ==, ... */
+int procBasicMath(const char *fname, aoclactx *ctx) {
+    obj *a = stackPop(ctx);
+    obj *b = stackPop(ctx);
+    if (!a || !b) {
+        release(a);
+        release(b);
+        return 1; /* Out of stack. */
+    }
+    if (a->type != OBJ_TYPE_INT || b->type != OBJ_TYPE_INT) {
+        setError(ctx,"Wrong object type for %s",fname);
+        release(a);
+        release(b);
+        return 1;
+    }
+    int res;
+    if (fname[0] == '+' && fname[1] == 0) res = a->i + b->i;
+    if (fname[0] == '-' && fname[1] == 0) res = a->i - b->i;
+    if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
+    if (fname[0] == '/' && fname[1] == 0) res = a->i / b->i;
+    if (fname[0] == '=' && fname[1] == '=') res = a->i == b->i;
+    stackPush(ctx,newInt(res));
+    return 0;
+}
+
+void loadLibrary(aoclactx *ctx) {
+    addProc(ctx,"+",procBasicMath,NULL);
+    addProc(ctx,"-",procBasicMath,NULL);
+    addProc(ctx,"*",procBasicMath,NULL);
+    addProc(ctx,"/",procBasicMath,NULL);
+    addProc(ctx,"==",procBasicMath,NULL);
 }
 
 /* ================================ CLI ===================================== */
-
-/* Read the lists contained in the file 'fp', parse them into an obj
- * type and populate v[...] with the es. The number of lists processed
- * is returned. */
-int readLists(FILE *fp, obj **v, size_t vlen) {
-    char buf[1024];
-    size_t idx = 0;
-    while(fgets(buf,sizeof(buf),fp) != NULL && idx < vlen) {
-        size_t l = strlen(buf);
-        if (l <= 1) continue;
-        if (buf[l-1] == '\n') {
-            buf[l-1] = 0;
-            l--;
-        }
-        v[idx++] = parseList(buf,NULL);
-    }
-    return idx;
-}
 
 /* Real Eval Print Loop. */
 void repl(void) {
@@ -355,12 +497,17 @@ void repl(void) {
         buf[l] = ']';
         buf[l+1] = 0;
 
-        obj *list = parseList(buf,NULL);
+        obj *list = parseList(ctx,buf,NULL);
         if (!list) {
-            printf("Syntax error\n");
+            printf("Parsing string: %s\n", ctx->errstr);
             continue;
         }
-        eval(ctx,list);
+        if (eval(ctx,list)) {
+            printf("%s\n", ctx->errstr);
+        } else {
+            stackShow(ctx);
+        }
+        release(list);
     }
 }
 
