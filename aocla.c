@@ -210,7 +210,7 @@ obj *parseList(aoclactx *ctx, const char *s, const char **next) {
         exit(1);
     } else {
         /* Syntax error. */
-        setError(ctx,s,"No object type starts with this character");
+        setError(ctx,s,"No object type starts like this");
         return NULL;
     }
     return o;
@@ -265,7 +265,19 @@ int qsort_list_cmp(const void *a, const void *b) {
 }
 
 /* Output an object human readable representation .*/
-void printobj(obj *obj) {
+void printobj(obj *obj, int color) {
+    const char *escape;
+    if (color) {
+        switch(obj->type) {
+        case OBJ_TYPE_LIST: escape = "\033[33;1m"; break;       /* Yellow. */
+        case OBJ_TYPE_TUPLE: escape = "\033[34;1m"; break;      /* Blue. */
+        case OBJ_TYPE_SYMBOL: escape = "\033[36;1m"; break;     /* Cyan. */
+        case OBJ_TYPE_STRING: escape = "\033[32;1m"; break;     /* Green. */
+        case OBJ_TYPE_INT: escape = "\033[37;1m"; break;        /* Gray. */
+        }
+        printf("%s",escape); /* Set color. */
+    }
+
     switch(obj->type) {
     case OBJ_TYPE_INT:
         printf("%d",obj->i);
@@ -274,22 +286,17 @@ void printobj(obj *obj) {
         printf("%s",obj->sym.ptr);
         break;
     case OBJ_TYPE_LIST:
-        printf("[");
-        for (size_t j = 0; j < obj->l.len; j++) {
-            printobj(obj->l.ele[j]);
-            if (j != obj->l.len-1) printf(", ");
-        }
-        printf("]");
-        break;
     case OBJ_TYPE_TUPLE:
-        printf("(");
+        printf("%c",obj->type == OBJ_TYPE_LIST ? '[' : '(');
         for (size_t j = 0; j < obj->l.len; j++) {
-            printobj(obj->l.ele[j]);
+            printobj(obj->l.ele[j],color);
             if (j != obj->l.len-1) printf(", ");
         }
-        printf(")");
+        if (color) printf("%s",escape); /* Restore upper level color. */
+        printf("%c",obj->type == OBJ_TYPE_LIST ? ']' : ')');
         break;
     }
+    if (color) printf("\033[0m"); /* Color off. */
 }
 
 /* Allocate a new object of type 'type. */
@@ -313,7 +320,7 @@ obj *newInt(int i) {
 void setError(aoclactx *ctx, const char *ptr, const char *msg) {
     if (!ctx) return;
     snprintf(ctx->errstr,ERRSTR_LEN,"%s: %.30s%s",
-        msg,strlen(msg)>30 ? "..." :"", ptr);
+        msg,ptr,strlen(ptr)>30 ? "..." :"");
 }
 
 /* Create a new stack frame. */
@@ -360,13 +367,18 @@ obj *stackPop(aoclactx *ctx) {
 }
 
 /* Show the current content of the stack. */
+#define STACK_SHOW_MAX_ELE 10
 void stackShow(aoclactx *ctx) {
-    ssize_t j, max = 10;
-    for (j = ctx->stacklen-1; j >= 0 && max; j--, max--) {
-        printobj(ctx->stack[j]);
-        printf("\n");
+    ssize_t j = ctx->stacklen - STACK_SHOW_MAX_ELE;
+    if (j < 0) j = 0;
+    while(j < (ssize_t)ctx->stacklen) {
+        obj *o = ctx->stack[j];
+        printobj(o,1); printf(" ");
+        j++;
     }
-    if (j > 0) printf("[... %zu more object ...]", j);
+    if (ctx->stacklen > STACK_SHOW_MAX_ELE)
+        printf("[... %zu more object ...]", j);
+    if (ctx->stacklen) printf("\n");
 }
 
 /* ================================ Eval ==================================== */
