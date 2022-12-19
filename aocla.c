@@ -33,10 +33,14 @@ typedef struct obj {
     };
 } obj;
 
-/* Procedures. They are just lists with names. */
+/* Procedures. They are just lists with associated names. There are also
+ * procedures implemented in C. In this case proc is NULL and cproc has
+ * the value of the function pointer implementing the procedure. */
+struct aoclactx;
 typedef struct aproc {
     const char *name;
-    obj *list;
+    obj *proc;      /* If not NULL it's an Aocla procedure (list object). */
+    void (cproc)(const char *, struct aoclactx *); /* C procedure. */
     struct aproc *next;
 } aproc;
 
@@ -131,8 +135,8 @@ obj *parseList(const char *s, const char **next) {
         o->i = atoi(buf);
         if (next) *next = s;
         return o;
-    } else if (s[0] == '[') {           /* List. */
-        o->type = OBJ_TYPE_LIST;
+    } else if (s[0] == '[' || s[1] == '(') { /* List or Tuple. */
+        o->type = s[0] == '[' ? OBJ_TYPE_LIST : OBJ_TYPE_TUPLE;
         o->l.len = 0;
         o->l.ele = NULL;
         s++;
@@ -141,7 +145,8 @@ obj *parseList(const char *s, const char **next) {
             /* The list may be empty, so we need to parse for "]"
              * ASAP. */
             while(isspace(s[0])) s++;
-            if (s[0] == ']') {
+            if ((o->type == OBJ_TYPE_LIST && s[0] == ']') ||
+                (p->type == OBJ_TYPE_TUPLE && s[0] == ')')) {
                 if (next) *next = s+1;
                 return o;
             }
@@ -150,6 +155,14 @@ obj *parseList(const char *s, const char **next) {
             const char *nextptr;
             obj *element = parseList(s,&nextptr);
             if (element == NULL) {
+                freeobj(o);
+                return NULL;
+            } else if (o->type == OBJ_TYPE_TUPLE &&
+                       (element->type != OBJ_TYPE_SYMBOL ||
+                        element->sym.len != 1))
+            {
+                /* Tuples can be only composed of one character symbols. */
+                freeobj(element);
                 freeobj(o);
                 return NULL;
             }
@@ -282,11 +295,22 @@ aoclactx *newInterpreter(void) {
     return i;
 }
 
+/* Search for a procedure with that name. Return NULL if not found. */
+aproc *lookupProc(aoclactx *ctx, const char *name) {
+    aproc *this = ctx->proc;
+    while(this) {
+        if (!strcmp(this->name,name)) return this;
+        this = this->next;
+    }
+    return NULL;
+}
+
 /* ================================ Eval ==================================== */
 
 /* Evaluate the program in the list 'l' in the specified context 'ctx'. */
 void eval(aoclactx *ctx, obj *l) {
-    if (l->type != OBJ_TYPE_LIST) return;
+    assert (l->type == OBJ_TYPE_LIST);
+
     printobj(l);
     printf("\n");
 }
@@ -317,17 +341,19 @@ void repl(void) {
     aoclactx *ctx = newInterpreter();
     while(1) {
         printf("aocla> "); fflush(stdout);
-        if (fgets(buf,sizeof(buf)-2,stdin) == NULL) break;
+
+        /* Aocla programs are Aocla lists, so when users just write
+         * in the REPL we need to surround with []. */
+        buf[0] = '[';
+
+        if (fgets(buf+1,sizeof(buf)-2,stdin) == NULL) break;
         size_t l = strlen(buf);
         if (l && buf[l-1] == '\n') buf[--l] = 0;
         if (l == 0) continue;
 
-        /* Aocla programs are Aocla lists, so when users just write
-         * in the REPL we need to surround with []. */
-        memmove(buf+1,buf,l);
-        buf[0] = '[';
-        buf[l+1] = ']';
-        buf[l+2] = 0;
+        /* Add closing ]. */
+        buf[l] = ']';
+        buf[l+1] = 0;
 
         obj *list = parseList(buf,NULL);
         if (!list) {
