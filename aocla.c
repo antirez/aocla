@@ -176,12 +176,13 @@ obj *parseList(aoclactx *ctx, const char *s, const char **next) {
                 return NULL;
             } else if (o->type == OBJ_TYPE_TUPLE &&
                        (element->type != OBJ_TYPE_SYMBOL ||
-                        element->sym.len != 1))
+                        element->sym.len != 1 ||
+                        !islower(element->sym.ptr[0])))
             {
                 /* Tuples can be only composed of one character symbols. */
                 release(element);
                 release(o);
-                setError(ctx,s,"Non symbol object in tuple");
+                setError(ctx,s,"Non lower case letter in tuple");
                 return NULL;
             }
             o->l.ele = myrealloc(o->l.ele, sizeof(obj*)*(o->l.len+1));
