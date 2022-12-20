@@ -308,6 +308,26 @@ obj *newInt(int i) {
     return o;
 }
 
+/* Deep copy the passed object. Return an object with refcount = 1. */
+obj *deepCopy(obj *o) {
+    if (o == NULL) return NULL;
+    /* TODO: actually implement it. */
+    printf("IMPLEMENT ME \\o/\n");
+    exit(1);
+}
+
+/* This function performs a deep copy of the object if it has a refcount > 1.
+ * The copy is returned. Otherwise if refcount is 1, the function returns
+ * the same object we passed as argument. This is useful when we want to
+ * modify a shared object. */
+obj *getUnsharedObject(obj *o) {
+    if (o->refcount > 1) {
+        return deepCopy(o);
+    } else {
+        return o;
+    }
+}
+
 /* ========================== Interpreter state ============================= */
 
 /* Set the syntax or runtime error, if the context is not NULL. */
@@ -329,8 +349,7 @@ stackframe *newStackFrame(void) {
 
 /* Free a stack frame. */
 void freeStackFrame(stackframe *sf) {
-    for (int j = 0; j < AOCLA_NUMVARS; j++)
-        if (sf->locals[j]) release(sf->locals[j]);
+    for (int j = 0; j < AOCLA_NUMVARS; j++) release(sf->locals[j]);
     free(sf);
 }
 
@@ -403,10 +422,25 @@ int eval(aoclactx *ctx, obj *l) {
         aproc *proc;
 
         switch(o->type) {
-        case OBJ_TYPE_SYMBOL:
+        case OBJ_TYPE_TUPLE:    /* Capture variables. */
+            if (ctx->stacklen < o->l.len) {
+                setError(ctx,NULL,"Out of stack while capturing locals");
+                return 1;
+            }
+
+            ctx->stacklen -= o->l.len;
+            for (size_t i = 0; i < o->l.len; i++) {
+                int idx = o->l.ele[i]->str.ptr[0] - 'a';
+                release(ctx->frame->locals[idx]);
+                ctx->frame->locals[idx] =
+                    ctx->stack[ctx->stacklen - o->l.len];
+            }
+            break;
+        case OBJ_TYPE_SYMBOL:   /* Execute procedure. */
             proc = lookupProc(ctx,o->str.ptr);
             if (proc == NULL) {
-                setError(ctx,o->str.ptr,"Symbol not bound to procedure");
+                setError(ctx,o->str.ptr,
+                    "Symbol not bound to procedure");
                 return 1;
             }
             if (proc->cproc) {
@@ -545,8 +579,10 @@ int procCompare(const char *fname, aoclactx *ctx) {
 int procSortList(const char *fname, aoclactx *ctx) {
     NOTUSED(fname);
     if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
-    obj *l = stackPeek(ctx);
+    obj *l = stackPop(ctx);
+    l = getUnsharedObject(l);
     qsort(l->l.ele,l->l.len,sizeof(obj*),qsort_obj_cmp);
+    stackPush(ctx,l);
     return 0;
 }
 
