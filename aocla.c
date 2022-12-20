@@ -48,7 +48,7 @@ typedef struct aproc {
 /* We have local vars, so we need a stack frame. We start with a top level
  * stack frame. Each time a procedure is called, we create a new stack frame
  * and free it once the procedure returns. */
-#define AOCLA_NUMVARS ('z'-'a'+1)
+#define AOCLA_NUMVARS 256
 typedef struct stackframe {
     obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
     aproc *curproc;            /* Current procedure executing or NULL.  */
@@ -127,6 +127,9 @@ int issymbol(int c) {
     case '=':
     case '?':
     case '%':
+    case '>':
+    case '<':
+    case '_':
         return 1;
     default:
         return 0;
@@ -136,9 +139,12 @@ int issymbol(int c) {
 /* Given the string 's' return the obj representing the list or
  * NULL on syntax error. '*next' is set to the next byte to parse, after
  * the current e was completely parsed.
+ * 
+ * The 'ctx' argument is only used to set an error in the context in case
+ * of parse error, it is possible to pass NULL.
  *
  * Returned object has a ref count of 1. */
-obj *parseList(aoclactx *ctx, const char *s, const char **next) {
+obj *newList(aoclactx *ctx, const char *s, const char **next) {
     obj *o = myalloc(sizeof(*o));
     o->refcount = 1;
     while(isspace(s[0])) s++;
@@ -170,19 +176,19 @@ obj *parseList(aoclactx *ctx, const char *s, const char **next) {
 
             /* Parse the current sub-element recursively. */
             const char *nextptr;
-            obj *element = parseList(ctx,s,&nextptr);
+            obj *element = newList(ctx,s,&nextptr);
             if (element == NULL) {
                 release(o);
                 return NULL;
             } else if (o->type == OBJ_TYPE_TUPLE &&
                        (element->type != OBJ_TYPE_SYMBOL ||
-                        element->str.len != 1 ||
-                        !islower(element->str.ptr[0])))
+                        element->str.len != 1))
             {
                 /* Tuples can be only composed of one character symbols. */
                 release(element);
                 release(o);
-                setError(ctx,s,"Non lower case letter in tuple");
+                setError(ctx,s,
+                    "Tuples can only contain single character symbols");
                 return NULL;
             }
             o->l.ele = myrealloc(o->l.ele, sizeof(obj*)*(o->l.len+1));
@@ -422,7 +428,7 @@ int eval(aoclactx *ctx, obj *l) {
         aproc *proc;
 
         switch(o->type) {
-        case OBJ_TYPE_TUPLE:    /* Capture variables. */
+        case OBJ_TYPE_TUPLE:                /* Capture variables. */
             if (ctx->stacklen < o->l.len) {
                 setError(ctx,NULL,"Out of stack while capturing locals");
                 return 1;
@@ -430,24 +436,22 @@ int eval(aoclactx *ctx, obj *l) {
 
             ctx->stacklen -= o->l.len;
             for (size_t i = 0; i < o->l.len; i++) {
-                int idx = o->l.ele[i]->str.ptr[0] - 'a';
+                int idx = o->l.ele[i]->str.ptr[0];
                 release(ctx->frame->locals[idx]);
                 ctx->frame->locals[idx] =
                     ctx->stack[ctx->stacklen+i];
             }
             break;
         case OBJ_TYPE_SYMBOL:
-            if (o->str.ptr[0] == '$' && o->str.ptr[1] >= 'a' &&
-                o->str.ptr[0] <= 'z')
-            {                   /* Push local var. */
-                int idx = o->str.ptr[1] - 'a';
+            if (o->str.ptr[0] == '$') {     /* Push local var. */
+                int idx = o->str.ptr[1];
                 if (ctx->frame->locals[idx] == NULL) {
                     setError(ctx,o->str.ptr, "Unbound local var");
                     return 1;
                 }
                 stackPush(ctx,ctx->frame->locals[idx]);
                 retain(ctx->frame->locals[idx]);
-            } else {            /* Call procedure. */
+            } else {                        /* Call procedure. */
                 proc = lookupProc(ctx,o->str.ptr);
                 if (proc == NULL) {
                     setError(ctx,o->str.ptr,
@@ -533,12 +537,31 @@ aproc *newProc(aoclactx *ctx, const char *name) {
 }
 
 /* Add a procedure to the specified context. Either cproc or list should
- * not be null. */
+ * not be null, depending on the fact the new procedure is implemented as
+ * a C function or natively in Aocla. If the procedure already exists it
+ * is replaced with the new one. */
 void addProc(aoclactx *ctx, const char *name, int(*cproc)(const char *, aoclactx *), obj *list) {
     assert((cproc != NULL) + (list != NULL) == 1);
-    aproc *ap = newProc(ctx,name);
+    aproc *ap = lookupProc(ctx, name);
+    if (ap) {
+        if (ap->proc != NULL) {
+            release(ap->proc);
+            ap->proc = NULL;
+        }
+    } else {
+        ap = newProc(ctx,name);
+    }
     ap->proc = list;
     ap->cproc = cproc;
+}
+
+/* Add a procedure represented by the Aocla code 'prog', that must
+ * be a valid list. On error (not valid list) 1 is returned, otherwise 0. */
+int addProcString(aoclactx *ctx, const char *name, const char *prog) {
+    obj *list = newList(NULL,prog,NULL);
+    if (prog == NULL) return 1;
+    addProc(ctx,name,NULL,list);
+    return 0;
 }
 
 /* Implements +, -, *, %, ... */
@@ -610,6 +633,9 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"<",procCompare,NULL);
     addProc(ctx,"!=",procCompare,NULL);
     addProc(ctx,"sort",procSortList,NULL);
+    addProcString(ctx,"dup","[(x) $x $x]");
+    addProcString(ctx,"swap","[(x y) $y $x]");
+    addProcString(ctx,"drop","[(_)]");
 }
 
 /* ================================ CLI ===================================== */
@@ -634,7 +660,7 @@ void repl(void) {
         buf[l] = ']';
         buf[l+1] = 0;
 
-        obj *list = parseList(ctx,buf,NULL);
+        obj *list = newList(ctx,buf,NULL);
         if (!list) {
             printf("Parsing string: %s\n", ctx->errstr);
             continue;
