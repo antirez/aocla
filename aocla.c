@@ -433,32 +433,44 @@ int eval(aoclactx *ctx, obj *l) {
                 int idx = o->l.ele[i]->str.ptr[0] - 'a';
                 release(ctx->frame->locals[idx]);
                 ctx->frame->locals[idx] =
-                    ctx->stack[ctx->stacklen - o->l.len];
+                    ctx->stack[ctx->stacklen+i];
             }
             break;
-        case OBJ_TYPE_SYMBOL:   /* Execute procedure. */
-            proc = lookupProc(ctx,o->str.ptr);
-            if (proc == NULL) {
-                setError(ctx,o->str.ptr,
-                    "Symbol not bound to procedure");
-                return 1;
-            }
-            if (proc->cproc) {
-                /* Call a procedure implemented in C. */
-                aproc *prev = ctx->frame->curproc;
-                ctx->frame->curproc = proc;
-                int err = proc->cproc(o->str.ptr,ctx);
-                ctx->frame->curproc = prev;
-                if (err) return err;
-            } else {
-                /* Call a procedure implemented in Aocla. */
-                stackframe *oldsf = ctx->frame;
-                ctx->frame = newStackFrame();
-                ctx->frame->curproc = proc;
-                int err = eval(ctx,proc->proc);
-                freeStackFrame(ctx->frame);
-                ctx->frame = oldsf;
-                if (err) return err;
+        case OBJ_TYPE_SYMBOL:
+            if (o->str.ptr[0] == '$' && o->str.ptr[1] >= 'a' &&
+                o->str.ptr[0] <= 'z')
+            {                   /* Push local var. */
+                int idx = o->str.ptr[1] - 'a';
+                if (ctx->frame->locals[idx] == NULL) {
+                    setError(ctx,o->str.ptr, "Unbound local var");
+                    return 1;
+                }
+                stackPush(ctx,ctx->frame->locals[idx]);
+                retain(ctx->frame->locals[idx]);
+            } else {            /* Call procedure. */
+                proc = lookupProc(ctx,o->str.ptr);
+                if (proc == NULL) {
+                    setError(ctx,o->str.ptr,
+                        "Symbol not bound to procedure");
+                    return 1;
+                }
+                if (proc->cproc) {
+                    /* Call a procedure implemented in C. */
+                    aproc *prev = ctx->frame->curproc;
+                    ctx->frame->curproc = proc;
+                    int err = proc->cproc(o->str.ptr,ctx);
+                    ctx->frame->curproc = prev;
+                    if (err) return err;
+                } else {
+                    /* Call a procedure implemented in Aocla. */
+                    stackframe *oldsf = ctx->frame;
+                    ctx->frame = newStackFrame();
+                    ctx->frame->curproc = proc;
+                    int err = eval(ctx,proc->proc);
+                    freeStackFrame(ctx->frame);
+                    ctx->frame = oldsf;
+                    if (err) return err;
+                }
             }
             break;
         default:
