@@ -522,7 +522,7 @@ int checkStackType(aoclactx *ctx, size_t count, ...) {
     va_start(ap, count);
     for (size_t i = 0; i < count; i++) {
         int type = va_arg(ap,int);
-        if (type != ctx->stack[ctx->stacklen-1-i]->type) {
+        if (type != ctx->stack[ctx->stacklen-count+i]->type) {
             setError(ctx,NULL,"Type mismatch");
             return 1;
         }
@@ -637,6 +637,18 @@ int procSortList(const char *fname, aoclactx *ctx) {
     return 0;
 }
 
+/* "def" let Aocla define new procedures, binding a list to a
+ * symbol in the procedure table. */
+int procDef(const char *fname, aoclactx *ctx) {
+    NOTUSED(fname);
+    if (checkStackType(ctx,2,OBJ_TYPE_LIST,OBJ_TYPE_SYMBOL)) return 1;
+    obj *sym = stackPop(ctx);
+    obj *code = stackPop(ctx);
+    addProc(ctx,sym->str.ptr,NULL,code);
+    release(sym);
+    return 0;
+}
+
 void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"+",procBasicMath,NULL);
     addProc(ctx,"-",procBasicMath,NULL);
@@ -649,6 +661,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"<",procCompare,NULL);
     addProc(ctx,"!=",procCompare,NULL);
     addProc(ctx,"sort",procSortList,NULL);
+    addProc(ctx,"def",procDef,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
