@@ -30,6 +30,9 @@ typedef struct obj {
         struct {    /* Mutable string & unmutable symbol. */
             char *ptr;
             size_t len;
+            int quoted; /* Used for quoted symbols: when quoted they are
+                           not executed, but just pushed on the stack by
+                           eval(). */
         } str;
     };
 } obj;
@@ -130,6 +133,7 @@ int issymbol(int c) {
     case '>':
     case '<':
     case '_':
+    case '\'':
         return 1;
     default:
         return 0;
@@ -203,6 +207,12 @@ obj *newList(aoclactx *ctx, const char *s, const char **next) {
         return NULL;
     } else if (issymbol(s[0])) {         /* Symbol. */
         o->type = OBJ_TYPE_SYMBOL;
+        if (s[0] == '\'') {
+            o->str.quoted = 1;
+            s++;
+        } else {
+            o->str.quoted = 0;
+        }
         const char *end = s;
         while(issymbol(*end)) end++;
         o->str.len = end-s;
@@ -443,6 +453,12 @@ int eval(aoclactx *ctx, obj *l) {
             }
             break;
         case OBJ_TYPE_SYMBOL:
+            /* Quoted symbols don't generate a procedure call, but like
+             * any other object they get pushed on the stack. */
+            if (o->str.quoted) {
+                stackPush(ctx,o);
+                break;
+            }
             if (o->str.ptr[0] == '$') {     /* Push local var. */
                 int idx = o->str.ptr[1];
                 if (ctx->frame->locals[idx] == NULL) {
