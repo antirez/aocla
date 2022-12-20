@@ -4,6 +4,9 @@
 #include <assert.h>
 #include <limits.h>
 #include <ctype.h>
+#include <stdarg.h>
+
+#define NOTUSED(V) ((void) V)
 
 /* =========================== Data structures ============================== */
 
@@ -24,14 +27,10 @@ typedef struct obj {
             struct obj **ele;
             size_t len;
         } l;
-        struct {    /* Mutable string. Literal: "Hello World"  */
+        struct {    /* Mutable string & unmutable symbol. */
             char *ptr;
             size_t len;
         } str;
-        struct sym { /* Symbol (non mutable string). Literal: foo */
-            const char *ptr;
-            size_t len;
-        } sym;
     };
 } obj;
 
@@ -120,6 +119,7 @@ void retain(obj *o) {
 int issymbol(int c) {
     if (isalpha(c)) return 1;
     switch(c) {
+    case '$':
     case '+':
     case '-':
     case '*':
@@ -176,8 +176,8 @@ obj *parseList(aoclactx *ctx, const char *s, const char **next) {
                 return NULL;
             } else if (o->type == OBJ_TYPE_TUPLE &&
                        (element->type != OBJ_TYPE_SYMBOL ||
-                        element->sym.len != 1 ||
-                        !islower(element->sym.ptr[0])))
+                        element->str.len != 1 ||
+                        !islower(element->str.ptr[0])))
             {
                 /* Tuples can be only composed of one character symbols. */
                 release(element);
@@ -199,11 +199,11 @@ obj *parseList(aoclactx *ctx, const char *s, const char **next) {
         o->type = OBJ_TYPE_SYMBOL;
         const char *end = s;
         while(issymbol(*end)) end++;
-        o->sym.len = end-s;
-        char *dest = myalloc(o->sym.len+1);
-        o->sym.ptr = dest;
-        memcpy(dest,s,o->sym.len);
-        dest[o->sym.len] = 0;
+        o->str.len = end-s;
+        char *dest = myalloc(o->str.len+1);
+        o->str.ptr = dest;
+        memcpy(dest,s,o->str.len);
+        dest[o->str.len] = 0;
         *next = end;
     } else if (s[0] == '"') {           /* String. */
         printf("IMPLEMENT STRING PARSING\n");
@@ -218,48 +218,42 @@ obj *parseList(aoclactx *ctx, const char *s, const char **next) {
 
 /* Compare the two objects 'a' and 'b' and return:
  * -1 if a<b; 0 if a==b; 1 if a>b. */
+#define COMPARE_TYPE_MISMATCH INT_MIN
 int compare(obj *a, obj *b) {
+    /* Int VS Int */
     if (a->type == OBJ_TYPE_INT && b->type == OBJ_TYPE_INT) {
         if (a->i < b->i) return -1;
         else if (a->i > b->i) return 1;
         return 0;
     }
 
-    /* If one of the objects is not a list, promote it to a list.
-     * Just use the stack to avoid allocating stuff for a single
-     * element list. */
-    obj list, listele, *ele[1];
-    list.type = OBJ_TYPE_LIST;
-    list.l.len = 1;
-    list.l.ele = ele;
-    list.l.ele[0] = &listele;
-    listele.type = OBJ_TYPE_INT;
-
-    /* Promote. */
-    if (a->type == OBJ_TYPE_INT) {
-        listele.i = a->i;
-        a = &list;
-    } else if (b->type == OBJ_TYPE_INT) {
-        listele.i = b->i;
-        b = &list;
+    /* String|Symbol VS String|Symbol. */
+    if ((a->type == OBJ_TYPE_STRING || a->type == OBJ_TYPE_SYMBOL) &&
+        (b->type == OBJ_TYPE_STRING || b->type == OBJ_TYPE_SYMBOL))
+    {
+        int cmp = strcmp(a->str.ptr,b->str.ptr);
+        /* Normalize. */
+        if (cmp < 0) return -1;
+        if (cmp > 0) return 1;
+        return 0;
     }
 
-    /* Now we can handle the list to list comparison without
-     * special cases. */
-    size_t minlen = a->l.len < b->l.len ? a->l.len : b->l.len;
-    for (size_t j = 0; j < minlen; j++) {
-        int cmp = compare(a->l.ele[j],b->l.ele[j]);
-        if (cmp != 0) return cmp;
+    /* List|Tuple vs List|Tuple. */
+    if ((a->type == OBJ_TYPE_LIST || a->type == OBJ_TYPE_TUPLE) &&
+        (b->type == OBJ_TYPE_LIST || b->type == OBJ_TYPE_TUPLE))
+    {
+        /* Len wins. */
+        if (a->l.len < b->l.len) return -1;
+        else if (a->l.len > b->l.len) return 1;
+        return 0;
     }
 
-    /* First MIN(len_a,len_b) elements are the same? Longer list wins. */
-    if (a->l.len < b->l.len) return -1;
-    else if (a->l.len > b->l.len) return 1;
-    return 0;
+    /* Comparison impossible. */
+    return COMPARE_TYPE_MISMATCH;
 }
 
 /* qsort() helper to sort arrays of obj pointers. */
-int qsort_list_cmp(const void *a, const void *b) {
+int qsort_obj_cmp(const void *a, const void *b) {
     obj **obja = (obj**)a, **objb = (obj**)b;
     return compare(obja[0],objb[0]);
 }
@@ -283,7 +277,7 @@ void printobj(obj *obj, int color) {
         printf("%d",obj->i);
         break;
     case OBJ_TYPE_SYMBOL:
-        printf("%s",obj->sym.ptr);
+        printf("%s",obj->str.ptr);
         break;
     case OBJ_TYPE_LIST:
     case OBJ_TYPE_TUPLE:
@@ -319,6 +313,8 @@ obj *newInt(int i) {
 /* Set the syntax or runtime error, if the context is not NULL. */
 void setError(aoclactx *ctx, const char *ptr, const char *msg) {
     if (!ctx) return;
+    if (!ptr) ptr = ctx->frame->curproc ?
+                    ctx->frame->curproc->name : "unknown context";
     snprintf(ctx->errstr,ERRSTR_LEN,"%s: %.30s%s",
         msg,ptr,strlen(ptr)>30 ? "..." :"");
 }
@@ -358,12 +354,14 @@ void stackPush(aoclactx *ctx, obj *o) {
 /* Pop an object from the stack without modifying its refcount.
  * Return NULL if stack is empty. */
 obj *stackPop(aoclactx *ctx) {
-    if (ctx->stacklen == 0) {
-        setError(ctx,ctx->frame->curproc ? ctx->frame->curproc->name : "",
-            "Out of stack");
-        return NULL;
-    }
+    if (ctx->stacklen == 0) return NULL;
     return ctx->stack[--ctx->stacklen];
+}
+
+/* Return the pointer to the last object on the stack or NULL. */
+obj *stackPeek(aoclactx *ctx) {
+    if (ctx->stacklen == 0) return NULL;
+    return ctx->stack[ctx->stacklen-1];
 }
 
 /* Show the current content of the stack. */
@@ -406,16 +404,16 @@ int eval(aoclactx *ctx, obj *l) {
 
         switch(o->type) {
         case OBJ_TYPE_SYMBOL:
-            proc = lookupProc(ctx,o->sym.ptr);
+            proc = lookupProc(ctx,o->str.ptr);
             if (proc == NULL) {
-                setError(ctx,o->sym.ptr,"Symbol not bound to procedure");
+                setError(ctx,o->str.ptr,"Symbol not bound to procedure");
                 return 1;
             }
             if (proc->cproc) {
                 /* Call a procedure implemented in C. */
                 aproc *prev = ctx->frame->curproc;
                 ctx->frame->curproc = proc;
-                int err = proc->cproc(o->sym.ptr,ctx);
+                int err = proc->cproc(o->str.ptr,ctx);
                 ctx->frame->curproc = prev;
                 if (err) return err;
             } else {
@@ -438,6 +436,34 @@ int eval(aoclactx *ctx, obj *l) {
 }
 
 /* ============================== Library =================================== */
+
+/* Make sure the stack len is at least 'min' or set an error and return 1.
+ * If there are enough elements 0 is returned. */
+int checkStackLen(aoclactx *ctx, size_t min) {
+    if (ctx->stacklen < min) {
+        setError(ctx,NULL,"Out of stack");
+        return 1;
+    }
+    return 0;
+}
+
+/* Check that the stack elements contain at least 'count' elements of
+ * the specified type. Otherwise set an error and return 1.
+ * The function returns 0 if there are enough elements of the right type. */
+int checkStackType(aoclactx *ctx, size_t count, ...) {
+    if (checkStackLen(ctx,count)) return 1;
+    va_list ap;
+    va_start(ap, count);
+    for (size_t i = 0; i < count; i++) {
+        int type = va_arg(ap,int);
+        if (type != ctx->stack[ctx->stacklen-1-i]->type) {
+            setError(ctx,NULL,"Type mismatch");
+            return 1;
+        }
+    }
+    va_end(ap);
+    return 0;
+}
 
 /* Search for a procedure with that name. Return NULL if not found. */
 aproc *lookupProc(aoclactx *ctx, const char *name) {
@@ -469,28 +495,58 @@ void addProc(aoclactx *ctx, const char *name, int(*cproc)(const char *, aoclactx
     ap->cproc = cproc;
 }
 
-/* Implements +, -, *, %, ==, ... */
+/* Implements +, -, *, %, ... */
 int procBasicMath(const char *fname, aoclactx *ctx) {
+    if (checkStackType(ctx,2,OBJ_TYPE_INT,OBJ_TYPE_INT)) return 1;
     obj *a = stackPop(ctx);
     obj *b = stackPop(ctx);
-    if (!a || !b) {
-        release(a);
-        release(b);
-        return 1; /* Out of stack. */
-    }
-    if (a->type != OBJ_TYPE_INT || b->type != OBJ_TYPE_INT) {
-        setError(ctx,"Wrong object type for %s",fname);
-        release(a);
-        release(b);
-        return 1;
-    }
+
     int res;
     if (fname[0] == '+' && fname[1] == 0) res = a->i + b->i;
     if (fname[0] == '-' && fname[1] == 0) res = a->i - b->i;
     if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
     if (fname[0] == '/' && fname[1] == 0) res = a->i / b->i;
-    if (fname[0] == '=' && fname[1] == '=') res = a->i == b->i;
     stackPush(ctx,newInt(res));
+    return 0;
+}
+
+/* Implements ==, >=, <=, !=. */
+int procCompare(const char *fname, aoclactx *ctx) {
+    if (checkStackLen(ctx,2)) return 1;
+    obj *a = stackPop(ctx);
+    obj *b = stackPop(ctx);
+    int cmp = compare(a,b);
+    if (cmp == COMPARE_TYPE_MISMATCH) {
+        stackPush(ctx,b);
+        stackPush(ctx,a);
+        setError(ctx,NULL,"Type mismatch in comparison");
+        return 1;
+    }
+
+    int res;
+    if (fname[1] == '=') {
+        switch(fname[0]) {
+        case '=': res = cmp == 0; break;
+        case '!': res = cmp != 0; break;
+        case '>': res = cmp >= 0; break;
+        case '<': res = cmp <= 0; break;
+        }
+    } else {
+        switch(fname[0]) {
+        case '>': res = cmp > 0; break;
+        case '<': res = cmp < 0; break;
+        }
+    }
+    stackPush(ctx,newInt(res));
+    return 0;
+}
+
+/* Implements sort. Sorts a list in place. */
+int procSortList(const char *fname, aoclactx *ctx) {
+    NOTUSED(fname);
+    if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
+    obj *l = stackPeek(ctx);
+    qsort(l->l.ele,l->l.len,sizeof(obj*),qsort_obj_cmp);
     return 0;
 }
 
@@ -499,7 +555,13 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"-",procBasicMath,NULL);
     addProc(ctx,"*",procBasicMath,NULL);
     addProc(ctx,"/",procBasicMath,NULL);
-    addProc(ctx,"==",procBasicMath,NULL);
+    addProc(ctx,"==",procCompare,NULL);
+    addProc(ctx,">=",procCompare,NULL);
+    addProc(ctx,">",procCompare,NULL);
+    addProc(ctx,"<=",procCompare,NULL);
+    addProc(ctx,"<",procCompare,NULL);
+    addProc(ctx,"!=",procCompare,NULL);
+    addProc(ctx,"sort",procSortList,NULL);
 }
 
 /* ================================ CLI ===================================== */
