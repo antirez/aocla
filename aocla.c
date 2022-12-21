@@ -22,6 +22,7 @@
 typedef struct obj {
     int type;       /* OBJ_TYPE_... */
     int refcount;   /* Reference count. */
+    int line;       /* Source code line number where this was defined, or 0. */
     union {
         int i;      /* Integer. Literal: 1234 */
         int istrue; /* Boolean. */
@@ -57,10 +58,12 @@ typedef struct aproc {
 typedef struct stackframe {
     obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
     aproc *curproc;            /* Current procedure executing or NULL.  */
+    int curline;               /* Current line number during execution. */
+    struct stackframe *prev;   /* Upper level stack frame or NULL. */
 } stackframe;
 
 /* Interpreter state. */
-#define ERRSTR_LEN 128
+#define ERRSTR_LEN 256
 typedef struct aoclactx {
     size_t stacklen;        /* Stack current len. */
     obj **stack;
@@ -127,6 +130,15 @@ void retain(obj *o) {
     o->refcount++;
 }
 
+/* Allocate a new object of type 'type. */
+obj *newObject(int type) {
+    obj *o = myalloc(sizeof(*o));
+    o->refcount = 1;
+    o->type = type;
+    o->line = 0;
+    return o;
+}
+
 /* Return true if the character 'c' is within the Aocla symbols charset. */
 int issymbol(int c) {
     if (isalpha(c)) return 1;
@@ -157,16 +169,20 @@ int issymbol(int c) {
  * of parse error, it is possible to pass NULL.
  *
  * Returned object has a ref count of 1. */
-obj *parseObject(aoclactx *ctx, const char *s, const char **next) {
-    obj *o = myalloc(sizeof(*o));
-    o->refcount = 1;
+obj *parseObject(aoclactx *ctx, const char *s, const char **next, int *line) {
+    obj *o = newObject(-1);
 
     /* Consume empty space and comments. */
     while(1) {
-        while(isspace(s[0])) s++;
+        while(isspace(s[0])) {
+            if (s[0] == '\n' && line) (*line)++;
+            s++;
+        }
         if (s[0] != '/' || s[1] != '/') break;
         while(s[0] && s[0] != '\n') s++; /* Seek newline after comment. */
     }
+    if (line)
+        o->line = *line; /* Set line number where this object is defined. */
 
     if ((s[0] == '-' && isdigit(s[1])) || isdigit(s[0])) { /* Integer. */
         char buf[64];
@@ -186,16 +202,20 @@ obj *parseObject(aoclactx *ctx, const char *s, const char **next) {
         while(1) {
             /* The list may be empty, so we need to parse for "]"
              * ASAP. */
-            while(isspace(s[0])) s++;
+            while(isspace(s[0])) {
+                if (s[0] == '\n' && line) (*line)++;
+                s++;
+            }
             if ((o->type == OBJ_TYPE_LIST && s[0] == ']') ||
-                (o->type == OBJ_TYPE_TUPLE && s[0] == ')')) {
+                (o->type == OBJ_TYPE_TUPLE && s[0] == ')'))
+            {
                 if (next) *next = s+1;
                 return o;
             }
 
             /* Parse the current sub-element recursively. */
             const char *nextptr;
-            obj *element = parseObject(ctx,s,&nextptr);
+            obj *element = parseObject(ctx,s,&nextptr,line);
             if (element == NULL) {
                 release(o);
                 return NULL;
@@ -402,14 +422,6 @@ void printobj(obj *obj, int flags) {
     if (color) printf("\033[0m"); /* Color off. */
 }
 
-/* Allocate a new object of type 'type. */
-obj *newObject(int type) {
-    obj *o = myalloc(sizeof(*o));
-    o->refcount = 1;
-    o->type = type;
-    return o;
-}
-
 /* Allocate an int object with value 'i'. */
 obj *newInt(int i) {
     obj *o = newObject(OBJ_TYPE_INT);
@@ -451,15 +463,25 @@ void setError(aoclactx *ctx, const char *ptr, const char *msg) {
     if (!ctx) return;
     if (!ptr) ptr = ctx->frame->curproc ?
                     ctx->frame->curproc->name : "unknown context";
-    snprintf(ctx->errstr,ERRSTR_LEN,"%s: %.30s%s",
-        msg,ptr,strlen(ptr)>30 ? "..." :"");
+    size_t len =
+        snprintf(ctx->errstr,ERRSTR_LEN,"%s: '%.30s%s'",
+            msg,ptr,strlen(ptr)>30 ? "..." :"");
+
+    stackframe *sf = ctx->frame;
+    while(sf && len < ERRSTR_LEN) {
+        len += snprintf(ctx->errstr+len,ERRSTR_LEN-len," in %s:%d ",
+            sf->curproc ? sf->curproc->name : "unknown",
+            sf->curline);
+        sf = sf->prev;
+    }
 }
 
 /* Create a new stack frame. */
-stackframe *newStackFrame(void) {
+stackframe *newStackFrame(aoclactx *ctx) {
     stackframe *sf = myalloc(sizeof(*sf));
     memset(sf->locals,0,sizeof(sf->locals));
     sf->curproc = NULL;
+    sf->prev = ctx ? ctx->frame : NULL;
     return sf;
 }
 
@@ -474,7 +496,7 @@ aoclactx *newInterpreter(void) {
     i->stacklen = 0;
     i->stack = NULL; /* Will be allocated on push of new elements. */
     i->proc = NULL; /* That's a linked list. Starts empty. */
-    i->frame = newStackFrame();
+    i->frame = newStackFrame(i);
     loadLibrary(i);
     return i;
 }
@@ -535,11 +557,13 @@ int eval(aoclactx *ctx, obj *l) {
     for (size_t j = 0; j < l->l.len; j++) {
         obj *o = l->l.ele[j];
         aproc *proc;
+        ctx->frame->curline = o->line;
 
         switch(o->type) {
         case OBJ_TYPE_TUPLE:                /* Capture variables. */
             if (ctx->stacklen < o->l.len) {
-                setError(ctx,NULL,"Out of stack while capturing locals");
+                setError(ctx,o->l.ele[ctx->stacklen]->str.ptr,
+                    "Out of stack while capturing local");
                 return 1;
             }
 
@@ -584,7 +608,7 @@ int eval(aoclactx *ctx, obj *l) {
                 } else {
                     /* Call a procedure implemented in Aocla. */
                     stackframe *oldsf = ctx->frame;
-                    ctx->frame = newStackFrame();
+                    ctx->frame = newStackFrame(ctx);
                     ctx->frame->curproc = proc;
                     int err = eval(ctx,proc->proc);
                     freeStackFrame(ctx->frame);
@@ -675,7 +699,7 @@ void addProc(aoclactx *ctx, const char *name, int(*cproc)(aoclactx *), obj *list
 /* Add a procedure represented by the Aocla code 'prog', that must
  * be a valid list. On error (not valid list) 1 is returned, otherwise 0. */
 int addProcString(aoclactx *ctx, const char *name, const char *prog) {
-    obj *list = parseObject(NULL,prog,NULL);
+    obj *list = parseObject(NULL,prog,NULL,NULL);
     if (prog == NULL) return 1;
     addProc(ctx,name,NULL,list);
     return 0;
@@ -793,6 +817,15 @@ rterr:  /* Run time error. */
     return 1;
 }
 
+/* Evaluate the given list. */
+int procEval(aoclactx *ctx) {
+    if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
+    obj *l = stackPop(ctx);
+    int retval = eval(ctx,l);
+    release(l);
+    return retval;
+}
+
 /* Print the top object to stdout. */
 int procPrint(aoclactx *ctx) {
     if (checkStackLen(ctx,1)) return 1;
@@ -817,6 +850,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"def",procDef,NULL);
     addProc(ctx,"if",procIf,NULL);
     addProc(ctx,"ifelse",procIf,NULL);
+    addProc(ctx,"eval",procEval,NULL);
     addProc(ctx,"print",procPrint,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
@@ -845,7 +879,7 @@ void repl(void) {
         buf[l] = ']';
         buf[l+1] = 0;
 
-        obj *list = parseObject(ctx,buf,NULL);
+        obj *list = parseObject(ctx,buf,NULL,NULL);
         if (!list) {
             printf("Parsing program: %s\n", ctx->errstr);
             continue;
@@ -889,7 +923,8 @@ int evalFile(const char *filename, char **argv, int argc) {
 
     /* Parse the program before eval(). */
     aoclactx *ctx = newInterpreter();
-    obj *l = parseObject(ctx,buf,NULL);
+    int line = 1;
+    obj *l = parseObject(ctx,buf,NULL,&line);
     free(buf);
     if (!l) {
         printf("Parsing program: %s\n", ctx->errstr);
@@ -899,7 +934,7 @@ int evalFile(const char *filename, char **argv, int argc) {
     /* Before evaluating the program, let's push on the arguments
      * we received on the stack. */
     for (int j = 0; j < argc; j++) {
-        obj *o = parseObject(NULL,argv[j],NULL);
+        obj *o = parseObject(NULL,argv[j],NULL,0);
         if (!o) {
             printf("Parsing command line argument: %s\n", ctx->errstr);
             release(l);
@@ -910,6 +945,7 @@ int evalFile(const char *filename, char **argv, int argc) {
 
     /* Run the program. */
     int retval = eval(ctx,l);
+    if (retval) printf("Runtime error: %s\n", ctx->errstr);
     release(l);
     return retval;
 }
