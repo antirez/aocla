@@ -496,7 +496,7 @@ aoclactx *newInterpreter(void) {
     i->stacklen = 0;
     i->stack = NULL; /* Will be allocated on push of new elements. */
     i->proc = NULL; /* That's a linked list. Starts empty. */
-    i->frame = newStackFrame(i);
+    i->frame = newStackFrame(NULL);
     loadLibrary(i);
     return i;
 }
@@ -778,9 +778,11 @@ int procDef(aoclactx *ctx) {
     return 0;
 }
 
-/* if and ifelse. */
+/* if, ifelse, while. */
 int procIf(aoclactx *ctx) {
-    int e = ctx->frame->curproc->name[2] == 'e';    /* ifelse? */
+    int w = ctx->frame->curproc->name[0] == 'w';        /* while? */
+    int e = ctx->frame->curproc->name[2] == 'e';        /* ifelse? */
+    int retval = 1;
     if (e) {
         if (checkStackType(ctx,3,OBJ_TYPE_LIST,OBJ_TYPE_LIST,OBJ_TYPE_LIST))
             return 1;
@@ -794,27 +796,31 @@ int procIf(aoclactx *ctx) {
     ifbranch = stackPop(ctx);
     cond = stackPop(ctx);
 
-    /* Evaluate the conditional program. */
-    if (eval(ctx,cond)) goto rterr;
-    if (checkStackType(ctx,1,OBJ_TYPE_BOOL)) goto rterr;
-    obj *condres = stackPop(ctx);
-    int res = condres->istrue;
-    release(condres);
+    while(w) {
+        /* Evaluate the conditional program. */
+        if (eval(ctx,cond)) goto rterr;
+        if (checkStackType(ctx,1,OBJ_TYPE_BOOL)) goto rterr;
+        obj *condres = stackPop(ctx);
+        int res = condres->istrue;
+        release(condres);
 
-    /* Now eval the true or false branch depending on the
-     * result. */
-    if (res) {
-        if (eval(ctx,ifbranch)) goto rterr;
-    } else if (e) {
-        if (eval(ctx,elsebranch)) goto rterr;
+        /* Now eval the true or false branch depending on the
+         * result. */
+        if (res) {
+            if (eval(ctx,ifbranch)) goto rterr;
+        } else if (e) {
+            if (eval(ctx,elsebranch)) goto rterr;
+        } else if (w) {
+            break; /* If while condition is false, break the loop. */
+        }
     }
-    return 0;
+    retval = 0; /* Success. */
 
-rterr:  /* Run time error. */
+rterr:  /* Cleanup. We jump here on error with retval = 1. */
     release(cond);
     release(ifbranch);
     release(elsebranch);
-    return 1;
+    return retval;
 }
 
 /* Evaluate the given list. */
@@ -850,6 +856,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"def",procDef,NULL);
     addProc(ctx,"if",procIf,NULL);
     addProc(ctx,"ifelse",procIf,NULL);
+    addProc(ctx,"while",procIf,NULL);
     addProc(ctx,"eval",procEval,NULL);
     addProc(ctx,"print",procPrint,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
