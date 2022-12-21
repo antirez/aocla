@@ -44,7 +44,7 @@ struct aoclactx;
 typedef struct aproc {
     const char *name;
     obj *proc;      /* If not NULL it's an Aocla procedure (list object). */
-    int (*cproc)(const char *, struct aoclactx *); /* C procedure. */
+    int (*cproc)(struct aoclactx *); /* C procedure. */
     struct aproc *next;
 } aproc;
 
@@ -478,7 +478,7 @@ int eval(aoclactx *ctx, obj *l) {
                     /* Call a procedure implemented in C. */
                     aproc *prev = ctx->frame->curproc;
                     ctx->frame->curproc = proc;
-                    int err = proc->cproc(o->str.ptr,ctx);
+                    int err = proc->cproc(ctx);
                     ctx->frame->curproc = prev;
                     if (err) return err;
                 } else {
@@ -556,7 +556,7 @@ aproc *newProc(aoclactx *ctx, const char *name) {
  * not be null, depending on the fact the new procedure is implemented as
  * a C function or natively in Aocla. If the procedure already exists it
  * is replaced with the new one. */
-void addProc(aoclactx *ctx, const char *name, int(*cproc)(const char *, aoclactx *), obj *list) {
+void addProc(aoclactx *ctx, const char *name, int(*cproc)(aoclactx *), obj *list) {
     assert((cproc != NULL) + (list != NULL) == 1);
     aproc *ap = lookupProc(ctx, name);
     if (ap) {
@@ -581,12 +581,13 @@ int addProcString(aoclactx *ctx, const char *name, const char *prog) {
 }
 
 /* Implements +, -, *, %, ... */
-int procBasicMath(const char *fname, aoclactx *ctx) {
+int procBasicMath(aoclactx *ctx) {
     if (checkStackType(ctx,2,OBJ_TYPE_INT,OBJ_TYPE_INT)) return 1;
     obj *a = stackPop(ctx);
     obj *b = stackPop(ctx);
 
     int res;
+    const char *fname = ctx->frame->curproc->name;
     if (fname[0] == '+' && fname[1] == 0) res = a->i + b->i;
     if (fname[0] == '-' && fname[1] == 0) res = a->i - b->i;
     if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
@@ -596,7 +597,7 @@ int procBasicMath(const char *fname, aoclactx *ctx) {
 }
 
 /* Implements ==, >=, <=, !=. */
-int procCompare(const char *fname, aoclactx *ctx) {
+int procCompare(aoclactx *ctx) {
     if (checkStackLen(ctx,2)) return 1;
     obj *a = stackPop(ctx);
     obj *b = stackPop(ctx);
@@ -609,6 +610,7 @@ int procCompare(const char *fname, aoclactx *ctx) {
     }
 
     int res;
+    const char *fname = ctx->frame->curproc->name;
     if (fname[1] == '=') {
         switch(fname[0]) {
         case '=': res = cmp == 0; break;
@@ -627,8 +629,7 @@ int procCompare(const char *fname, aoclactx *ctx) {
 }
 
 /* Implements sort. Sorts a list in place. */
-int procSortList(const char *fname, aoclactx *ctx) {
-    NOTUSED(fname);
+int procSortList(aoclactx *ctx) {
     if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
     obj *l = stackPop(ctx);
     l = getUnsharedObject(l);
@@ -639,8 +640,7 @@ int procSortList(const char *fname, aoclactx *ctx) {
 
 /* "def" let Aocla define new procedures, binding a list to a
  * symbol in the procedure table. */
-int procDef(const char *fname, aoclactx *ctx) {
-    NOTUSED(fname);
+int procDef(aoclactx *ctx) {
     if (checkStackType(ctx,2,OBJ_TYPE_LIST,OBJ_TYPE_SYMBOL)) return 1;
     obj *sym = stackPop(ctx);
     obj *code = stackPop(ctx);
