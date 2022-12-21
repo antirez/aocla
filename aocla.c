@@ -157,7 +157,7 @@ int issymbol(int c) {
  * of parse error, it is possible to pass NULL.
  *
  * Returned object has a ref count of 1. */
-obj *newList(aoclactx *ctx, const char *s, const char **next) {
+obj *parseObject(aoclactx *ctx, const char *s, const char **next) {
     obj *o = myalloc(sizeof(*o));
     o->refcount = 1;
     while(isspace(s[0])) s++;
@@ -189,7 +189,7 @@ obj *newList(aoclactx *ctx, const char *s, const char **next) {
 
             /* Parse the current sub-element recursively. */
             const char *nextptr;
-            obj *element = newList(ctx,s,&nextptr);
+            obj *element = parseObject(ctx,s,&nextptr);
             if (element == NULL) {
                 release(o);
                 return NULL;
@@ -613,7 +613,7 @@ void addProc(aoclactx *ctx, const char *name, int(*cproc)(aoclactx *), obj *list
 /* Add a procedure represented by the Aocla code 'prog', that must
  * be a valid list. On error (not valid list) 1 is returned, otherwise 0. */
 int addProcString(aoclactx *ctx, const char *name, const char *prog) {
-    obj *list = newList(NULL,prog,NULL);
+    obj *list = parseObject(NULL,prog,NULL);
     if (prog == NULL) return 1;
     addProc(ctx,name,NULL,list);
     return 0;
@@ -640,8 +640,8 @@ int procBasicMath(aoclactx *ctx) {
 /* Implements ==, >=, <=, !=. */
 int procCompare(aoclactx *ctx) {
     if (checkStackLen(ctx,2)) return 1;
-    obj *a = stackPop(ctx);
     obj *b = stackPop(ctx);
+    obj *a = stackPop(ctx);
     int cmp = compare(a,b);
     if (cmp == COMPARE_TYPE_MISMATCH) {
         stackPush(ctx,b);
@@ -692,6 +692,45 @@ int procDef(aoclactx *ctx) {
     return 0;
 }
 
+/* if and ifelse. */
+int procIf(aoclactx *ctx) {
+    int e = ctx->frame->curproc->name[2] == 'e';    /* ifelse? */
+    if (e) {
+        if (checkStackType(ctx,3,OBJ_TYPE_LIST,OBJ_TYPE_LIST,OBJ_TYPE_LIST))
+            return 1;
+    } else {
+        if (checkStackType(ctx,2,OBJ_TYPE_LIST,OBJ_TYPE_LIST))
+            return 1;
+    }
+
+    obj *elsebranch, *ifbranch, *cond;
+    elsebranch = e ? stackPop(ctx) : NULL;
+    ifbranch = stackPop(ctx);
+    cond = stackPop(ctx);
+
+    /* Evaluate the conditional program. */
+    if (eval(ctx,cond)) goto rterr;
+    if (checkStackType(ctx,1,OBJ_TYPE_BOOL)) goto rterr;
+    obj *condres = stackPop(ctx);
+    int res = condres->istrue;
+    release(condres);
+
+    /* Now eval the true or false branch depending on the
+     * result. */
+    if (res) {
+        if (eval(ctx,ifbranch)) goto rterr;
+    } else if (e) {
+        if (eval(ctx,elsebranch)) goto rterr;
+    }
+    return 0;
+
+rterr:  /* Run time error. */
+    release(cond);
+    release(ifbranch);
+    release(elsebranch);
+    return 1;
+}
+
 void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"+",procBasicMath,NULL);
     addProc(ctx,"-",procBasicMath,NULL);
@@ -705,6 +744,8 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"!=",procCompare,NULL);
     addProc(ctx,"sort",procSortList,NULL);
     addProc(ctx,"def",procDef,NULL);
+    addProc(ctx,"if",procIf,NULL);
+    addProc(ctx,"ifelse",procIf,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
@@ -732,9 +773,9 @@ void repl(void) {
         buf[l] = ']';
         buf[l+1] = 0;
 
-        obj *list = newList(ctx,buf,NULL);
+        obj *list = parseObject(ctx,buf,NULL);
         if (!list) {
-            printf("Parsing string: %s\n", ctx->errstr);
+            printf("Parsing program: %s\n", ctx->errstr);
             continue;
         }
         if (eval(ctx,list)) {
@@ -746,14 +787,65 @@ void repl(void) {
     }
 }
 
-void evalFile(const char *filename, char **argv, int argc) {
+/* Execute the program contained in the specified filename.
+ * Return 1 on error, 0 otherwise. */
+int evalFile(const char *filename, char **argv, int argc) {
+    FILE *fp = fopen(filename,"r");
+    if (!fp) {
+        perror("Opening file");
+        return 1;
+    }
+
+    /* Read file into buffer. */
+    int incrlen = 1024; /* How much to allocate when we are out of buffer. */
+    char *buf = myalloc(incrlen);
+    size_t buflen = 1, nread;
+    size_t leftspace = incrlen-buflen;
+    buf[0] = '[';
+    while((nread = fread(buf+buflen,1,leftspace,fp)) > 0) {
+        buflen += nread;
+        leftspace -= nread;
+        if (leftspace == 0) {
+            buf = myrealloc(buf,buflen+incrlen);
+            leftspace += incrlen;
+        }
+    }
+    if (leftspace < 2) buf = myrealloc(buf,buflen+2);
+    buf[buflen++] = ']';
+    buf[buflen++] = 0;
+    fclose(fp);
+
+    /* Parse the program before eval(). */
+    aoclactx *ctx = newInterpreter();
+    obj *o = parseObject(ctx,buf,NULL);
+    free(buf);
+    if (!o) {
+        printf("Parsing program: %s\n", ctx->errstr);
+        return 1;
+    }
+
+    /* Before evaluating the program, let's push on the arguments
+     * we received on the stack. */
+    for (int j = 0; j < argc; j++) {
+        o = parseObject(NULL,argv[j],NULL);
+        if (!o) {
+            printf("Parsing command line argument: %s\n", ctx->errstr);
+            return 1;
+        }
+        stackPush(ctx,o);
+    }
+
+    /* Run the program. */
+    int retval = eval(ctx,o);
+    release(o);
+    return retval;
 }
 
 int main(int argc, char **argv) {
     if (argc == 1) {
         repl();
     } else if (argc >= 2) {
-        evalFile(argv[1],argv+1,argc-1);
+        if (evalFile(argv[1],argv+1,argc-1)) return 1;
     }
     return 0;
 }
