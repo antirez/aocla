@@ -18,11 +18,13 @@
 #define OBJ_TYPE_TUPLE 2
 #define OBJ_TYPE_STRING 3
 #define OBJ_TYPE_SYMBOL 4
+#define OBJ_TYPE_BOOL 5
 typedef struct obj {
     int type;       /* OBJ_TYPE_... */
     int refcount;   /* Reference count. */
     union {
         int i;      /* Integer. Literal: 1234 */
+        int istrue; /* Boolean. */
         struct {    /* List: Literal: [1,2,3,4] or [1 2 3 4] */
             struct obj **ele;
             size_t len;
@@ -102,12 +104,19 @@ void release(obj *o) {
     assert(o->refcount >= 0);
     if (--o->refcount == 0) {
         switch(o->type) {
-        case OBJ_TYPE_INT: break; /* Nothing nested to free. */
         case OBJ_TYPE_LIST:
+        case OBJ_TYPE_TUPLE:
             for (size_t j = 0; j < o->l.len; j++)
                 release(o->l.ele[j]);
             free(o->l.ele);
             break;
+        case OBJ_TYPE_SYMBOL:
+        case OBJ_TYPE_STRING:
+            free(o->str.ptr);
+            break;
+        default:
+            break;
+            /* Nothing special to free. */
         }
         free(o);
     }
@@ -152,7 +161,7 @@ obj *newList(aoclactx *ctx, const char *s, const char **next) {
     obj *o = myalloc(sizeof(*o));
     o->refcount = 1;
     while(isspace(s[0])) s++;
-    if (s[0] == '-' || isdigit(s[0])) { /* Integer. */
+    if ((s[0] == '-' && isdigit(s[1])) || isdigit(s[0])) { /* Integer. */
         char buf[64];
         size_t len = 0;
         while((*s == '-' || isdigit(*s)) && len < sizeof(buf)-1)
@@ -220,13 +229,24 @@ obj *newList(aoclactx *ctx, const char *s, const char **next) {
         o->str.ptr = dest;
         memcpy(dest,s,o->str.len);
         dest[o->str.len] = 0;
-        *next = end;
+        if (next) *next = end;
+    } else if (s[0]=='#') {             /* Boolean. */
+        if (s[1] != 't' && s[1] != 'f') {
+            setError(ctx,s,"Booelans are either #t or #f");
+            release(o);
+            return NULL;
+        }
+        o->type = OBJ_TYPE_BOOL;
+        o->istrue = s[1] == 't' ? 1 : 0;
+        s += 2;
+        if (next) *next = s;
     } else if (s[0] == '"') {           /* String. */
         printf("IMPLEMENT STRING PARSING\n");
         exit(1);
     } else {
         /* Syntax error. */
         setError(ctx,s,"No object type starts like this");
+        release(o);
         return NULL;
     }
     return o;
@@ -240,6 +260,13 @@ int compare(obj *a, obj *b) {
     if (a->type == OBJ_TYPE_INT && b->type == OBJ_TYPE_INT) {
         if (a->i < b->i) return -1;
         else if (a->i > b->i) return 1;
+        return 0;
+    }
+
+    /* Bool vs Bool. */
+    if (a->type == OBJ_TYPE_BOOL && b->type == OBJ_TYPE_BOOL) {
+        if (a->istrue < b->istrue) return -1;
+        else if (a->istrue > b->istrue) return 1;
         return 0;
     }
 
@@ -284,6 +311,7 @@ void printobj(obj *obj, int color) {
         case OBJ_TYPE_SYMBOL: escape = "\033[36;1m"; break;     /* Cyan. */
         case OBJ_TYPE_STRING: escape = "\033[32;1m"; break;     /* Green. */
         case OBJ_TYPE_INT: escape = "\033[37;1m"; break;        /* Gray. */
+        case OBJ_TYPE_BOOL: escape = "\033[35;1m"; break;       /* Gray. */
         }
         printf("%s",escape); /* Set color. */
     }
@@ -294,6 +322,9 @@ void printobj(obj *obj, int color) {
         break;
     case OBJ_TYPE_SYMBOL:
         printf("%s",obj->str.ptr);
+        break;
+    case OBJ_TYPE_BOOL:
+        printf("#%c",obj->istrue ? 't' : 'f');
         break;
     case OBJ_TYPE_LIST:
     case OBJ_TYPE_TUPLE:
@@ -321,6 +352,13 @@ obj *newObject(int type) {
 obj *newInt(int i) {
     obj *o = newObject(OBJ_TYPE_INT);
     o->i = i;
+    return o;
+}
+
+/* Allocate a boolean object with value 'b' (1 true, 0 false). */
+obj *newBool(int b) {
+    obj *o = newObject(OBJ_TYPE_BOOL);
+    o->istrue = b;
     return o;
 }
 
@@ -383,7 +421,6 @@ aoclactx *newInterpreter(void) {
 void stackPush(aoclactx *ctx, obj *o) {
     ctx->stack = myrealloc(ctx->stack,sizeof(obj*) * (ctx->stacklen+1));
     ctx->stack[ctx->stacklen++] = o;
-    retain(o);
 }
 
 /* Pop an object from the stack without modifying its refcount.
@@ -457,6 +494,7 @@ int eval(aoclactx *ctx, obj *l) {
              * any other object they get pushed on the stack. */
             if (o->str.quoted) {
                 stackPush(ctx,o);
+                retain(o);
                 break;
             }
             if (o->str.ptr[0] == '$') {     /* Push local var. */
@@ -495,6 +533,7 @@ int eval(aoclactx *ctx, obj *l) {
             break;
         default:
             stackPush(ctx,o);
+            retain(o);
             break;
         }
     }
@@ -624,7 +663,7 @@ int procCompare(aoclactx *ctx) {
         case '<': res = cmp < 0; break;
         }
     }
-    stackPush(ctx,newInt(res));
+    stackPush(ctx,newBool(res));
     return 0;
 }
 
