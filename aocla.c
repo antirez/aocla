@@ -12,13 +12,17 @@
 
 /* This describes our Aocla object type. It can be used to represent
  * lists (and code: they are the same type in Aocla), integers, strings
- * and so forth. */
-#define OBJ_TYPE_INT  0
-#define OBJ_TYPE_LIST 1
-#define OBJ_TYPE_TUPLE 2
-#define OBJ_TYPE_STRING 3
-#define OBJ_TYPE_SYMBOL 4
-#define OBJ_TYPE_BOOL 5
+ * and so forth.
+ *
+ * Type are defined so that each type ID is a different set bit, this way
+ * in checkStackType() we may ask the function to check if some argument
+ * is one among a list of types just bitwise-oring the type IDs together. */
+#define OBJ_TYPE_INT    (1<<0)
+#define OBJ_TYPE_LIST   (1<<1)
+#define OBJ_TYPE_TUPLE  (1<<2)
+#define OBJ_TYPE_STRING (1<<3)
+#define OBJ_TYPE_SYMBOL (1<<4)
+#define OBJ_TYPE_BOOL   (1<<5)
 typedef struct obj {
     int type;       /* OBJ_TYPE_... */
     int refcount;   /* Reference count. */
@@ -626,7 +630,11 @@ int eval(aoclactx *ctx, obj *l) {
     return 0;
 }
 
-/* ============================== Library =================================== */
+/* ============================== Library ===================================
+ * Here we implement a number of things useful to play with the language.
+ * Performance is not really a concern here, so certain core things are
+ * implemented in Aocla itself for the sake of brevity.
+ * ========================================================================== */
 
 /* Make sure the stack len is at least 'min' or set an error and return 1.
  * If there are enough elements 0 is returned. */
@@ -647,7 +655,7 @@ int checkStackType(aoclactx *ctx, size_t count, ...) {
     va_start(ap, count);
     for (size_t i = 0; i < count; i++) {
         int type = va_arg(ap,int);
-        if (type != ctx->stack[ctx->stacklen-count+i]->type) {
+        if (!(type & ctx->stack[ctx->stacklen-count+i]->type)) {
             setError(ctx,NULL,"Type mismatch");
             return 1;
         }
@@ -778,7 +786,14 @@ int procDef(aoclactx *ctx) {
     return 0;
 }
 
-/* if, ifelse, while. */
+/* if, ifelse, while.
+ *
+ * We could implement while in AOCLA itself, once we have ifelse, however
+ * this way we would build everything on a recursive implementation (still
+ * we don't have tail recursion implemented), making every other thing
+ * using while a issue with the stack length. Also stack trace on error
+ * is a mess. And if you see the implementation, while is mostly an obvious
+ * result of the ifelse implementation itself. */
 int procIf(aoclactx *ctx) {
     int w = ctx->frame->curproc->name[0] == 'w';        /* while? */
     int e = ctx->frame->curproc->name[2] == 'e';        /* ifelse? */
@@ -841,6 +856,22 @@ int procPrint(aoclactx *ctx) {
     return 0;
 }
 
+/* Len replace the object on top with its length. Works with many types. */
+int procLen(aoclactx *ctx) {
+    if (checkStackType(ctx,1,OBJ_TYPE_LIST|OBJ_TYPE_TUPLE|OBJ_TYPE_STRING|
+                             OBJ_TYPE_SYMBOL)) return 1;
+
+    obj *o = stackPop(ctx);
+    int len;
+    switch(o->type) {
+    case OBJ_TYPE_LIST: case OBJ_TYPE_TUPLE:    len = o->l.len; break;
+    case OBJ_TYPE_STRING: case OBJ_TYPE_SYMBOL: len = o->str.len; break;
+    }
+    release(o);
+    stackPush(ctx,newInt(len));
+    return 0;
+}
+
 void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"+",procBasicMath,NULL);
     addProc(ctx,"-",procBasicMath,NULL);
@@ -859,6 +890,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"while",procIf,NULL);
     addProc(ctx,"eval",procEval,NULL);
     addProc(ctx,"print",procPrint,NULL);
+    addProc(ctx,"len",procLen,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
