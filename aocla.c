@@ -160,7 +160,14 @@ int issymbol(int c) {
 obj *parseObject(aoclactx *ctx, const char *s, const char **next) {
     obj *o = myalloc(sizeof(*o));
     o->refcount = 1;
-    while(isspace(s[0])) s++;
+
+    /* Consume empty space and comments. */
+    while(1) {
+        while(isspace(s[0])) s++;
+        if (s[0] != '/' || s[1] != '/') break;
+        while(s[0] && s[0] != '\n') s++; /* Seek newline after comment. */
+    }
+
     if ((s[0] == '-' && isdigit(s[1])) || isdigit(s[0])) { /* Integer. */
         char buf[64];
         size_t len = 0;
@@ -170,7 +177,6 @@ obj *parseObject(aoclactx *ctx, const char *s, const char **next) {
         o->type = OBJ_TYPE_INT;
         o->i = atoi(buf);
         if (next) *next = s;
-        return o;
     } else if (s[0] == '[' || s[0] == '(') { /* List or Tuple. */
         o->type = s[0] == '[' ? OBJ_TYPE_LIST : OBJ_TYPE_TUPLE;
         o->l.len = 0;
@@ -241,8 +247,40 @@ obj *parseObject(aoclactx *ctx, const char *s, const char **next) {
         s += 2;
         if (next) *next = s;
     } else if (s[0] == '"') {           /* String. */
-        printf("IMPLEMENT STRING PARSING\n");
-        exit(1);
+        s++; /* Skip " */
+        o->type = OBJ_TYPE_STRING;
+        o->str.ptr = myalloc(1); /* We need at least space for nullterm. */
+        o->str.len = 0;
+        while(s[0] && s[0] != '"') {
+            int c = s[0];
+            switch(c) {
+            case '\\':
+                s++;
+                int q = s[0];
+                switch(q) {
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                default: c = q; break;
+                }
+            default:
+                break;
+            }
+            /* Here we abuse realloc() ability to overallocate for us
+             * in order to avoid complexity. We allocate len+2 because we
+             * need 1 byte for the current char, 1 for the nullterm. */
+            o->str.ptr = myrealloc(o->str.ptr,o->str.len+2);
+            o->str.ptr[o->str.len++] = c;
+            s++;
+        }
+        if (s[0] != '"') {
+            setError(ctx,s,"Quotation marks never closed in string");
+            release(o);
+            return NULL;
+        }
+        o->str.ptr[o->str.len] = 0; /* nullterm. */
+        s++;
+        if (next) *next = s;
     } else {
         /* Syntax error. */
         setError(ctx,s,"No object type starts like this");
@@ -302,8 +340,14 @@ int qsort_obj_cmp(const void *a, const void *b) {
 }
 
 /* Output an object human readable representation .*/
-void printobj(obj *obj, int color) {
+#define PRINT_RAW 0             /* Nothing special. */
+#define PRINT_COLOR (1<<0)      /* Colorized by type. */
+#define PRINT_REPR (1<<1)       /* Print in Aocla literal form. */
+void printobj(obj *obj, int flags) {
     const char *escape;
+    int color = flags & PRINT_COLOR;
+    int repr = flags & PRINT_REPR;
+
     if (color) {
         switch(obj->type) {
         case OBJ_TYPE_LIST: escape = "\033[33;1m"; break;       /* Yellow. */
@@ -323,18 +367,36 @@ void printobj(obj *obj, int color) {
     case OBJ_TYPE_SYMBOL:
         printf("%s",obj->str.ptr);
         break;
+    case OBJ_TYPE_STRING:
+        if (!repr) {
+            fwrite(obj->str.ptr,obj->str.len,1,stdout);
+        } else {
+            printf("\"");
+            for (size_t j = 0; j < obj->str.len; j++) {
+                int c = obj->str.ptr[j];
+                switch(c) {
+                case '\n': printf("\\n"); break;
+                case '\r': printf("\\r"); break;
+                case '\t': printf("\\t"); break;
+                case '"': printf("\\\""); break;
+                default: printf("%c", c); break;
+                }
+            }
+            printf("\"");
+        }
+        break;
     case OBJ_TYPE_BOOL:
         printf("#%c",obj->istrue ? 't' : 'f');
         break;
     case OBJ_TYPE_LIST:
     case OBJ_TYPE_TUPLE:
-        printf("%c",obj->type == OBJ_TYPE_LIST ? '[' : '(');
+        if (repr) printf("%c",obj->type == OBJ_TYPE_LIST ? '[' : '(');
         for (size_t j = 0; j < obj->l.len; j++) {
-            printobj(obj->l.ele[j],color);
+            printobj(obj->l.ele[j],flags);
             if (j != obj->l.len-1) printf(", ");
         }
         if (color) printf("%s",escape); /* Restore upper level color. */
-        printf("%c",obj->type == OBJ_TYPE_LIST ? ']' : ')');
+        if (repr) printf("%c",obj->type == OBJ_TYPE_LIST ? ']' : ')');
         break;
     }
     if (color) printf("\033[0m"); /* Color off. */
@@ -443,7 +505,7 @@ void stackShow(aoclactx *ctx) {
     if (j < 0) j = 0;
     while(j < (ssize_t)ctx->stacklen) {
         obj *o = ctx->stack[j];
-        printobj(o,1); printf(" ");
+        printobj(o,PRINT_COLOR|PRINT_REPR); printf(" ");
         j++;
     }
     if (ctx->stacklen > STACK_SHOW_MAX_ELE)
@@ -731,6 +793,15 @@ rterr:  /* Run time error. */
     return 1;
 }
 
+/* Print the top object to stdout. */
+int procPrint(aoclactx *ctx) {
+    if (checkStackLen(ctx,1)) return 1;
+    obj *o = stackPop(ctx);
+    printobj(o,PRINT_RAW);
+    release(o);
+    return 0;
+}
+
 void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"+",procBasicMath,NULL);
     addProc(ctx,"-",procBasicMath,NULL);
@@ -746,6 +817,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"def",procDef,NULL);
     addProc(ctx,"if",procIf,NULL);
     addProc(ctx,"ifelse",procIf,NULL);
+    addProc(ctx,"print",procPrint,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
@@ -817,9 +889,9 @@ int evalFile(const char *filename, char **argv, int argc) {
 
     /* Parse the program before eval(). */
     aoclactx *ctx = newInterpreter();
-    obj *o = parseObject(ctx,buf,NULL);
+    obj *l = parseObject(ctx,buf,NULL);
     free(buf);
-    if (!o) {
+    if (!l) {
         printf("Parsing program: %s\n", ctx->errstr);
         return 1;
     }
@@ -827,17 +899,18 @@ int evalFile(const char *filename, char **argv, int argc) {
     /* Before evaluating the program, let's push on the arguments
      * we received on the stack. */
     for (int j = 0; j < argc; j++) {
-        o = parseObject(NULL,argv[j],NULL);
+        obj *o = parseObject(NULL,argv[j],NULL);
         if (!o) {
             printf("Parsing command line argument: %s\n", ctx->errstr);
+            release(l);
             return 1;
         }
         stackPush(ctx,o);
     }
 
     /* Run the program. */
-    int retval = eval(ctx,o);
-    release(o);
+    int retval = eval(ctx,l);
+    release(l);
     return retval;
 }
 
