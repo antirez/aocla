@@ -632,6 +632,8 @@ int procBasicMath(aoclactx *ctx) {
     if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
     if (fname[0] == '/' && fname[1] == 0) res = a->i / b->i;
     stackPush(ctx,newInt(res));
+    release(a);
+    release(b);
     return 0;
 }
 
@@ -664,6 +666,8 @@ int procCompare(aoclactx *ctx) {
         }
     }
     stackPush(ctx,newBool(res));
+    release(a);
+    release(b);
     return 0;
 }
 
