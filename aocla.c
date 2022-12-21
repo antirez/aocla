@@ -23,6 +23,7 @@
 #define OBJ_TYPE_STRING (1<<3)
 #define OBJ_TYPE_SYMBOL (1<<4)
 #define OBJ_TYPE_BOOL   (1<<5)
+#define OBJ_TYPE_ANY    INT_MAX /* All bits set. For checkStackType(). */
 typedef struct obj {
     int type;       /* OBJ_TYPE_... */
     int refcount;   /* Reference count. */
@@ -147,6 +148,7 @@ obj *newObject(int type) {
 int issymbol(int c) {
     if (isalpha(c)) return 1;
     switch(c) {
+    case '@':
     case '$':
     case '+':
     case '-':
@@ -443,9 +445,26 @@ obj *newBool(int b) {
 /* Deep copy the passed object. Return an object with refcount = 1. */
 obj *deepCopy(obj *o) {
     if (o == NULL) return NULL;
-    /* TODO: actually implement it. */
-    printf("IMPLEMENT ME \\o/\n");
-    exit(1);
+    obj *c = newObject(o->type);
+    switch(o->type) {
+    case OBJ_TYPE_INT: c->i = o->i; break;
+    case OBJ_TYPE_BOOL: c->istrue = o->istrue; break;
+    case OBJ_TYPE_LIST:
+    case OBJ_TYPE_TUPLE:
+        c->l.len = o->l.len;
+        c->l.ele = myalloc(sizeof(obj*)*o->l.len);
+        for (size_t j = 0; j < o->l.len; j++)
+            c->l.ele[j] = deepCopy(o->l.ele[j]);
+        break;
+    case OBJ_TYPE_STRING:
+    case OBJ_TYPE_SYMBOL:
+        c->str.len = o->str.len;
+        c->str.quoted = o->str.quoted; /* Only useful for symbols. */
+        c->str.ptr = myalloc(o->str.len+1);
+        memcpy(c->str.ptr,o->str.ptr,o->str.len+1);
+        break;
+    }
+    return c;
 }
 
 /* This function performs a deep copy of the object if it has a refcount > 1.
@@ -518,10 +537,11 @@ obj *stackPop(aoclactx *ctx) {
     return ctx->stack[--ctx->stacklen];
 }
 
-/* Return the pointer to the last object on the stack or NULL. */
-obj *stackPeek(aoclactx *ctx) {
-    if (ctx->stacklen == 0) return NULL;
-    return ctx->stack[ctx->stacklen-1];
+/* Return the pointer to the last object (if offset == 0) on the stack
+ * or NULL. Offset of 1 means penultimate and so forth.  */
+obj *stackPeek(aoclactx *ctx, size_t offset) {
+    if (ctx->stacklen <= offset) return NULL;
+    return ctx->stack[ctx->stacklen-1-offset];
 }
 
 /* Show the current content of the stack. */
@@ -583,10 +603,15 @@ int eval(aoclactx *ctx, obj *l) {
             /* Quoted symbols don't generate a procedure call, but like
              * any other object they get pushed on the stack. */
             if (o->str.quoted) {
-                stackPush(ctx,o);
-                retain(o);
+                obj *notq = deepCopy(o);
+                notq->str.quoted = 0;
+                stackPush(ctx,notq);
                 break;
             }
+
+            /* Not quoted symbols get looked up and executed if they
+             * don't start with "$". Otherwise are handled as locals
+             * push on the stack. */
             if (o->str.ptr[0] == '$') {     /* Push local var. */
                 int idx = o->str.ptr[1];
                 if (ctx->frame->locals[idx] == NULL) {
@@ -788,6 +813,9 @@ int procDef(aoclactx *ctx) {
 
 /* if, ifelse, while.
  *
+ * (list) => (result)               // if
+ * (list list) => (result)          // ifelse and while
+ *
  * We could implement while in AOCLA itself, once we have ifelse, however
  * this way we would build everything on a recursive implementation (still
  * we don't have tail recursion implemented), making every other thing
@@ -838,7 +866,7 @@ rterr:  /* Cleanup. We jump here on error with retval = 1. */
     return retval;
 }
 
-/* Evaluate the given list. */
+/* Evaluate the given list, consuming it. */
 int procEval(aoclactx *ctx) {
     if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
     obj *l = stackPop(ctx);
@@ -847,7 +875,7 @@ int procEval(aoclactx *ctx) {
     return retval;
 }
 
-/* Print the top object to stdout. */
+/* Print the top object to stdout, consuming it */
 int procPrint(aoclactx *ctx) {
     if (checkStackLen(ctx,1)) return 1;
     obj *o = stackPop(ctx);
@@ -856,7 +884,8 @@ int procPrint(aoclactx *ctx) {
     return 0;
 }
 
-/* Len replace the object on top with its length. Works with many types. */
+/* Len -- gets object len. Works with many types.
+ * (object) => (len) */
 int procLen(aoclactx *ctx) {
     if (checkStackType(ctx,1,OBJ_TYPE_LIST|OBJ_TYPE_TUPLE|OBJ_TYPE_STRING|
                              OBJ_TYPE_SYMBOL)) return 1;
@@ -869,6 +898,48 @@ int procLen(aoclactx *ctx) {
     }
     release(o);
     stackPush(ctx,newInt(len));
+    return 0;
+}
+
+/* Implements -> and <-, appending element x in list with stack
+ *
+ * ([1 2 3] x) => ([1 2 3 x]) | ([x 1 2 3])
+ *
+ * <- is very inefficient as it memmoves all N elements. */
+int procListAppend(aoclactx *ctx) {
+    int tail = ctx->frame->curproc->name[0] == '-';     /* Append on tail? */
+    if (checkStackType(ctx,2,OBJ_TYPE_ANY,OBJ_TYPE_LIST)) return 1;
+    obj *l = getUnsharedObject(stackPop(ctx));
+    obj *ele = stackPop(ctx);
+    l->l.ele = myrealloc(l->l.ele,sizeof(obj*)*(l->l.len+1));
+    if (tail) {
+        l->l.ele[l->l.len] = ele;
+    } else {
+        memmove(l->l.ele+1,l->l.ele,sizeof(obj*)*l->l.len);
+        l->l.ele[0] = ele;
+    }
+    l->l.len++;
+    stackPush(ctx,l);
+    return 0;
+}
+
+/* @idx -- get element at index:
+ * (list index) => (list element)
+ *
+ * TODO: this should work for strings as well. */
+int procListGetAt(aoclactx *ctx) {
+    if (checkStackType(ctx,2,OBJ_TYPE_LIST,OBJ_TYPE_INT)) return 1;
+    obj *idx = stackPop(ctx);
+    obj *list = stackPeek(ctx,0);
+    int i = idx->i;
+    if (i < 0) i = list->l.len+i; /* -1 is last element, and so forth. */
+    release(idx);
+    if (i < 0 || (size_t)i >= list->l.len) {
+        stackPush(ctx,newBool(0)); // Out of index? Just push false.
+    } else {
+        stackPush(ctx,list->l.ele[i]);
+        retain(list->l.ele[i]);
+    }
     return 0;
 }
 
@@ -891,6 +962,9 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"eval",procEval,NULL);
     addProc(ctx,"print",procPrint,NULL);
     addProc(ctx,"len",procLen,NULL);
+    addProc(ctx,"->",procListAppend,NULL);
+    addProc(ctx,"<-",procListAppend,NULL);
+    addProc(ctx,"get@",procListGetAt,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
