@@ -167,6 +167,20 @@ int issymbol(int c) {
     }
 }
 
+/* Utility function for parseObject(). It just consumes spaces and comments
+ * and return the new pointer after the consumed part of the string. */
+const char *parserConsumeSpace(const char *s, int *line) {
+    while(1) {
+        while(isspace(s[0])) {
+            if (s[0] == '\n' && line) (*line)++;
+            s++;
+        }
+        if (s[0] != '/' || s[1] != '/') break; /* // style comments. */
+        while(s[0] && s[0] != '\n') s++; /* Seek newline after comment. */
+    }
+    return s;
+}
+
 /* Given the string 's' return the obj representing the list or
  * NULL on syntax error. '*next' is set to the next byte to parse, after
  * the current e was completely parsed.
@@ -179,14 +193,7 @@ obj *parseObject(aoclactx *ctx, const char *s, const char **next, int *line) {
     obj *o = newObject(-1);
 
     /* Consume empty space and comments. */
-    while(1) {
-        while(isspace(s[0])) {
-            if (s[0] == '\n' && line) (*line)++;
-            s++;
-        }
-        if (s[0] != '/' || s[1] != '/') break;
-        while(s[0] && s[0] != '\n') s++; /* Seek newline after comment. */
-    }
+    s = parserConsumeSpace(s,line);
     if (line)
         o->line = *line; /* Set line number where this object is defined. */
 
@@ -208,10 +215,7 @@ obj *parseObject(aoclactx *ctx, const char *s, const char **next, int *line) {
         while(1) {
             /* The list may be empty, so we need to parse for "]"
              * ASAP. */
-            while(isspace(s[0])) {
-                if (s[0] == '\n' && line) (*line)++;
-                s++;
-            }
+            s = parserConsumeSpace(s,line);
             if ((o->type == OBJ_TYPE_LIST && s[0] == ']') ||
                 (o->type == OBJ_TYPE_TUPLE && s[0] == ')'))
             {
@@ -976,6 +980,7 @@ void loadLibrary(aoclactx *ctx) {
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
+    addProcString(ctx,"map", "[(l f) $l len (e) 0 (j) [] [$j $e <] [ $l $j get@ $f eval swap -> $j 1 + (j)] while]");
 }
 
 /* ================================ CLI ===================================== */
