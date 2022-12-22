@@ -446,6 +446,17 @@ obj *newBool(int b) {
     return o;
 }
 
+/* Allocate a string object initialized with the content at 's' for
+ * 'len' bytes. */
+obj *newString(const char *s, size_t len) {
+    obj *o = newObject(OBJ_TYPE_STRING);
+    o->str.len = len;
+    o->str.ptr = myalloc(len+1);
+    memcpy(o->str.ptr,s,len);
+    o->str.ptr[len] = 0;
+    return o;
+}
+
 /* Deep copy the passed object. Return an object with refcount = 1. */
 obj *deepCopy(obj *o) {
     if (o == NULL) return NULL;
@@ -879,6 +890,22 @@ int procEval(aoclactx *ctx) {
     return retval;
 }
 
+/* Like eval, but the code is evaluated in the stack frame of the calling
+ * procedure, if any. */
+int procUpeval(aoclactx *ctx) {
+    if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
+    obj *l = stackPop(ctx);
+    stackframe *saved = NULL;
+    if (ctx->frame->prev) {
+        saved = ctx->frame;
+        ctx->frame = ctx->frame->prev;
+    }
+    int retval = eval(ctx,l);
+    if (saved) ctx->frame = saved;
+    release(l);
+    return retval;
+}
+
 /* Print the top object to stdout, consuming it */
 int procPrint(aoclactx *ctx) {
     if (checkStackLen(ctx,1)) return 1;
@@ -886,6 +913,13 @@ int procPrint(aoclactx *ctx) {
     printobj(o,PRINT_RAW);
     release(o);
     return 0;
+}
+
+/* Like print but also prints a newline at the end. */
+int procPrintnl(aoclactx *ctx) {
+    if (checkStackLen(ctx,1)) return 1;
+    int ret = procPrint(ctx); printf("\n");
+    return ret;
 }
 
 /* Len -- gets object len. Works with many types.
@@ -927,24 +961,28 @@ int procListAppend(aoclactx *ctx) {
     return 0;
 }
 
-/* @idx -- get element at index:
- * (list index) => (element)
- *
- * TODO: this should work for strings as well. */
+/* @idx -- get element at index. Works for lists, strings, tuples.
+ * (object index) => (element). */
 int procListGetAt(aoclactx *ctx) {
-    if (checkStackType(ctx,2,OBJ_TYPE_LIST,OBJ_TYPE_INT)) return 1;
+    if (checkStackType(ctx,2,OBJ_TYPE_LIST|OBJ_TYPE_STRING|OBJ_TYPE_TUPLE,
+                             OBJ_TYPE_INT)) return 1;
     obj *idx = stackPop(ctx);
-    obj *list = stackPop(ctx);
+    obj *o = stackPop(ctx);
     int i = idx->i;
-    if (i < 0) i = list->l.len+i; /* -1 is last element, and so forth. */
+    size_t len = o->type == OBJ_TYPE_STRING ? o->str.len : o->l.len;
+    if (i < 0) i = len+i; /* -1 is last element, and so forth. */
     release(idx);
-    if (i < 0 || (size_t)i >= list->l.len) {
+    if (i < 0 || (size_t)i >= len) {
         stackPush(ctx,newBool(0)); // Out of index? Just push false.
     } else {
-        stackPush(ctx,list->l.ele[i]);
-        retain(list->l.ele[i]);
+        if (o->type == OBJ_TYPE_STRING) {
+            stackPush(ctx,newString(o->str.ptr+i,1));
+        } else {
+            stackPush(ctx,o->l.ele[i]);
+            retain(o->l.ele[i]);
+        }
     }
-    release(list);
+    release(o);
     return 0;
 }
 
@@ -954,6 +992,7 @@ int procShowStack(aoclactx *ctx) {
     return 0;
 }
 
+/* Load the "standard library" of Aocla in the specified context. */
 void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"+",procBasicMath,NULL);
     addProc(ctx,"-",procBasicMath,NULL);
@@ -971,16 +1010,22 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"ifelse",procIf,NULL);
     addProc(ctx,"while",procIf,NULL);
     addProc(ctx,"eval",procEval,NULL);
+    addProc(ctx,"upeval",procUpeval,NULL);
     addProc(ctx,"print",procPrint,NULL);
+    addProc(ctx,"printnl",procPrintnl,NULL);
     addProc(ctx,"len",procLen,NULL);
     addProc(ctx,"->",procListAppend,NULL);
     addProc(ctx,"<-",procListAppend,NULL);
     addProc(ctx,"get@",procListGetAt,NULL);
     addProc(ctx,"showstack",procShowStack,NULL);
+
+    /* Since the point of this interpreter to be a short and understandable
+     * programming example, we implement as much as possible in Aocla itself
+     * without caring much about performances. */
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
-    addProcString(ctx,"map", "[(l f) $l len (e) 0 (j) [] [$j $e <] [ $l $j get@ $f eval swap -> $j 1 + (j)] while]");
+    addProcString(ctx,"map", "[(l f) $l len (e) 0 (j) [] [$j $e <] [ $l $j get@ $f upeval swap -> $j 1 + (j)] while]");
 }
 
 /* ================================ CLI ===================================== */
@@ -1080,7 +1125,7 @@ int main(int argc, char **argv) {
     if (argc == 1) {
         repl();
     } else if (argc >= 2) {
-        if (evalFile(argv[1],argv+1,argc-1)) return 1;
+        if (evalFile(argv[1],argv+2,argc-2)) return 1;
     }
     return 0;
 }

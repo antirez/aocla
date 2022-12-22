@@ -1,5 +1,5 @@
-// This is an implementation of map. There is already one inside
-// Aocla, but this will redefine it.
+// This is a commented version of the implementation of 'map' inside
+// the standard library.
 
 [(l f) // list and function to apply
     $l len (e)  // Get list len in "e"
@@ -7,11 +7,11 @@
     []          // We will populate this empty list
     [$j $e <] [
         $l $j get@
-        $f eval
+        $f upeval
         swap ->
         $j 1 + (j)
     ] while
 ] 'map def
 
 [1 2 3] [dup *] map
-print
+printnl
