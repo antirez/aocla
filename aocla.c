@@ -839,7 +839,7 @@ int procIf(aoclactx *ctx) {
     ifbranch = stackPop(ctx);
     cond = stackPop(ctx);
 
-    while(w) {
+    while(1) {
         /* Evaluate the conditional program. */
         if (eval(ctx,cond)) goto rterr;
         if (checkStackType(ctx,1,OBJ_TYPE_BOOL)) goto rterr;
@@ -849,13 +849,13 @@ int procIf(aoclactx *ctx) {
 
         /* Now eval the true or false branch depending on the
          * result. */
-        if (res) {
+        if (res) { /* True branch (if, ifelse, while). */
             if (eval(ctx,ifbranch)) goto rterr;
-        } else if (e) {
+            if (w) continue;
+        } else if (e) { /* False branch (ifelse). */
             if (eval(ctx,elsebranch)) goto rterr;
-        } else if (w) {
-            break; /* If while condition is false, break the loop. */
         }
+        break;
     }
     retval = 0; /* Success. */
 
@@ -924,13 +924,13 @@ int procListAppend(aoclactx *ctx) {
 }
 
 /* @idx -- get element at index:
- * (list index) => (list element)
+ * (list index) => (element)
  *
  * TODO: this should work for strings as well. */
 int procListGetAt(aoclactx *ctx) {
     if (checkStackType(ctx,2,OBJ_TYPE_LIST,OBJ_TYPE_INT)) return 1;
     obj *idx = stackPop(ctx);
-    obj *list = stackPeek(ctx,0);
+    obj *list = stackPop(ctx);
     int i = idx->i;
     if (i < 0) i = list->l.len+i; /* -1 is last element, and so forth. */
     release(idx);
@@ -940,6 +940,13 @@ int procListGetAt(aoclactx *ctx) {
         stackPush(ctx,list->l.ele[i]);
         retain(list->l.ele[i]);
     }
+    release(list);
+    return 0;
+}
+
+/* Show the current stack. Useful for debugging. */
+int procShowStack(aoclactx *ctx) {
+    stackShow(ctx);
     return 0;
 }
 
@@ -965,6 +972,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"->",procListAppend,NULL);
     addProc(ctx,"<-",procListAppend,NULL);
     addProc(ctx,"get@",procListGetAt,NULL);
+    addProc(ctx,"showstack",procShowStack,NULL);
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
