@@ -31,9 +31,11 @@ typedef struct obj {
     union {
         int i;      /* Integer. Literal: 1234 */
         int istrue; /* Boolean. */
-        struct {    /* List: Literal: [1,2,3,4] or [1 2 3 4] */
+        struct {    /* List or Tuple: Literal: [1 2 3 4] or (a b c) */
             struct obj **ele;
             size_t len;
+            int quoted; /* Used for quoted tuples. Don't capture vars if true.
+                           Just push the tuple on stack. */
         } l;
         struct {    /* Mutable string & unmutable symbol. */
             char *ptr;
@@ -206,7 +208,16 @@ obj *parseObject(aoclactx *ctx, const char *s, const char **next, int *line) {
         o->type = OBJ_TYPE_INT;
         o->i = atoi(buf);
         if (next) *next = s;
-    } else if (s[0] == '[' || s[0] == '(') { /* List or Tuple. */
+    } else if (s[0] == '[' || /* List, tuple or quoted tuple. */
+               s[0] == '(' ||
+               (s[0] == '\'' && s[1] == '('))
+    {
+        if (s[0] == '\'') {
+            o->l.quoted = 1;
+            s++;
+        } else {
+            o->l.quoted = 0;
+        }
         o->type = s[0] == '[' ? OBJ_TYPE_LIST : OBJ_TYPE_TUPLE;
         o->l.len = 0;
         o->l.ele = NULL;
@@ -600,6 +611,15 @@ int eval(aoclactx *ctx, obj *l) {
 
         switch(o->type) {
         case OBJ_TYPE_TUPLE:                /* Capture variables. */
+            /* Quoted tuples just get pushed on the stack, losing
+             * their quoted status. */
+            if (o->l.quoted) {
+                obj *notq = deepCopy(o);
+                notq->l.quoted = 0;
+                stackPush(ctx,notq);
+                break;
+            }
+
             if (ctx->stacklen < o->l.len) {
                 setError(ctx,o->l.ele[ctx->stacklen]->str.ptr,
                     "Out of stack while capturing local");
