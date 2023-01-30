@@ -434,7 +434,7 @@ void printobj(obj *obj, int flags) {
         if (repr) printf("%c",obj->type == OBJ_TYPE_LIST ? '[' : '(');
         for (size_t j = 0; j < obj->l.len; j++) {
             printobj(obj->l.ele[j],flags);
-            if (j != obj->l.len-1) printf(", ");
+            if (j != obj->l.len-1) printf(" ");
         }
         if (color) printf("%s",escape); /* Restore upper level color. */
         if (repr) printf("%c",obj->type == OBJ_TYPE_LIST ? ']' : ')');
