@@ -961,7 +961,7 @@ int procLen(aoclactx *ctx) {
 
 /* Implements -> and <-, appending element x in list with stack
  *
- * ([1 2 3] x) => ([1 2 3 x]) | ([x 1 2 3])
+ * (x [1 2 3]) => ([1 2 3 x]) | ([x 1 2 3])
  *
  * <- is very inefficient as it memmoves all N elements. */
 int procListAppend(aoclactx *ctx) {
@@ -981,7 +981,7 @@ int procListAppend(aoclactx *ctx) {
     return 0;
 }
 
-/* @idx -- get element at index. Works for lists, strings, tuples.
+/* get@ -- get element at index. Works for lists, strings, tuples.
  * (object index) => (element). */
 int procListGetAt(aoclactx *ctx) {
     if (checkStackType(ctx,2,OBJ_TYPE_LIST|OBJ_TYPE_STRING|OBJ_TYPE_TUPLE,
@@ -1057,6 +1057,9 @@ void loadLibrary(aoclactx *ctx) {
 
     /* [1 2 3] rest => [2 3] */
     addProcString(ctx,"rest","[#t (f) [] (n) [[$f] [#f (f) drop] [$n -> (n)] ifelse] foreach $n]");
+
+    /* [1 2 3] [4 5 6] cat => [1 2 3 4 5 6] */
+    addProcString(ctx,"cat","[(a b) $b [$a -> (a)] foreach $a]");
 }
 
 /* ================================ CLI ===================================== */
