@@ -30,7 +30,7 @@ typedef struct obj {
     int line;       /* Source code line number where this was defined, or 0. */
     union {
         int i;      /* Integer. Literal: 1234 */
-        int istrue; /* Boolean. */
+        int istrue; /* Boolean. Literal: #t or #f */
         struct {    /* List or Tuple: Literal: [1 2 3 4] or (a b c) */
             struct obj **ele;
             size_t len;
@@ -776,8 +776,8 @@ int addProcString(aoclactx *ctx, const char *name, const char *prog) {
 /* Implements +, -, *, %, ... */
 int procBasicMath(aoclactx *ctx) {
     if (checkStackType(ctx,2,OBJ_TYPE_INT,OBJ_TYPE_INT)) return 1;
-    obj *a = stackPop(ctx);
     obj *b = stackPop(ctx);
+    obj *a = stackPop(ctx);
 
     int res;
     const char *fname = ctx->frame->curproc->name;
