@@ -1045,7 +1045,18 @@ void loadLibrary(aoclactx *ctx) {
     addProcString(ctx,"dup","[(x) $x $x]");
     addProcString(ctx,"swap","[(x y) $y $x]");
     addProcString(ctx,"drop","[(_)]");
+
+    /* [1 2 3] [dup *] map => [1 4 9] */
     addProcString(ctx,"map", "[(l f) $l len (e) 0 (j) [] [$j $e <] [ $l $j get@ $f upeval swap -> $j 1 + (j)] while]");
+
+    /* [1 2 3] [printnl] foreach */
+    addProcString(ctx,"foreach"," [(l f) $l len (e) 0 (j) [$j $e <] [$l $j get@ $f upeval $j 1 + (j)] while]");
+
+    /* [1 2 3] first => 1 */
+    addProcString(ctx,"first","[0 get@]");
+
+    /* [1 2 3] rest => [2 3] */
+    addProcString(ctx,"rest","[#t (f) [] (n) [[$f] [#f (f) drop] [$n -> (n)] ifelse] foreach $n]");
 }
 
 /* ================================ CLI ===================================== */
