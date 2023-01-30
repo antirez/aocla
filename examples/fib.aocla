@@ -1,0 +1,16 @@
+// Fibonacci example
+
+[(n)
+    [$n 1 <=]
+    [
+        $n
+    ]
+    [
+        $n 1 - fib
+        $n 2 - fib
+        +
+    ] ifelse
+] 'fib def
+
+10 fib
+printnl
