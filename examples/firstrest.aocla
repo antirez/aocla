@@ -1,0 +1,21 @@
+// Fundamental list manipulation functions. Part of the standard library.
+// first, rest, cat
+
+[
+    0 get@
+] 'first def
+
+[
+    #t (f) // True only for the first element
+    [] (n) // New list
+    [
+        [$f] [
+            #f (f)  // Set flag to false
+            drop    // Discard first element
+        ] [
+            $n -> (n)
+        ] ifelse
+    ] foreach
+    $n
+] 'rest def
+

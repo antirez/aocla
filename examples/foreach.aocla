@@ -1,0 +1,14 @@
+// This is a commented version of the implementation of 'foreach' inside
+// the standard library.
+
+[(l f) // list and function to call with each element.
+    $l len (e)  // Get list len in "e"
+    0 (j)       // j is our current index
+    [$j $e <] [
+        $l $j get@  // Get list[j]
+        $f upeval   // We want to evaluate in the context of the caller
+        $j 1 + (j)  // Go to the next index
+    ] while
+] 'foreach def
+
+[1 2 3] [printnl] foreach

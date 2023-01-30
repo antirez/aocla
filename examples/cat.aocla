@@ -1,0 +1,11 @@
+// List concatenation. This procedure is part of the standard
+// library.
+
+// [1 2 3] [4 5 6] cat => [1 2 3 4 5 6]
+[(a b)
+    $b [$a -> (a)] foreach
+    $a
+] 'cat def
+
+[1 2 3] [4 5 6] cat
+showstack
