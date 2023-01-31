@@ -46,7 +46,7 @@ If an Aocla word is a tuple, like `(x y)`, its execution has the effect of remov
 
 After the above program is executed, the stack will be empty and the local variables x and y will contain 10 and 20.
 
-Finally, if an Aocla word is a symbol starting with the `$` character and a single additional character, the object stored at the specfied variable is pushed on the stack. So the program to square 5 we wrote earlier can be rewritten as:
+Finally, if an Aocla word is a symbol starting with the `$` character and a single additional character, the object stored at the specified variable is pushed on the stack. So the program to square 5 we wrote earlier can be rewritten as:
 
     5 (x) $x $x *
 
@@ -271,7 +271,7 @@ stack and evaluates it.
     aocla> 5 [dup dup dup] eval
     5 5 5 5
 
-In the above example we executed the list contaning the program that calls
+In the above example we executed the list containing the program that calls
 `dup` three times. Let's write a better example, a procedure that executes
 the same code a specified number of times:
 
@@ -358,7 +358,154 @@ we want to create, and the variable name that the procedure will increment:
 
     proc-name, var-name
 
+And here is the program to do this:
 
+    [ (p v) // Procedure, var.
+        []                      // Accumulate our program into an empty list
+        '$ $v cat swap ->       // Push $<varname> into the stack
+        1 swap ->               // Push 1
+        '+ swap ->              // Call +
+        $v [] -> make-tuple swap -> // Capture back value into <varname>
+        [] ->                       // Put all into a nested list
+        'upeval swap ->             // Call upeval against the program
+        $p def // Create the procedure  // Bind to the specified proc name
+    ] 'create-incrementing-proc def
 
+Basically calling `create-incrementing-proc` will end generating
+a list like that (you can check the intermediate results by adding
+`showstack` calls in your programs):
+
+    [[$x 1 + (x)] upeval]
+
+And finally the list is bound to the specified symbol using `def`.
+
+Certain times programs that write programs can be quite useful. They are a
+central feature in many Lisp dialects. However in the specific case of
+Aocla different procedures can be composed via the stack, and we also
+have `uplevel`, so I feel their usefulness is greatly reduced. Also note
+that if Aocla was a serious language, it would have a lot more constructs
+to making writing programs that write programs a lot simpler than the above. Anyway, as you saw earlier, when we implemented the `repeat` procedure, in Aocla
+you can already do interesting stuff without using this programming
+paradigm.
+
+Ok, I think that's enough. We saw the basic of stack languages, the specific
+stuff Aocla adds and how the language feels like. This isn't a course
+on stack languages, nor I would be the best person to talk about the
+argument. This is a course on how to write a small interpreter in C, so
+let's dive into the Aocla interpreter internals.
 
 # Aocla internals
+
+At the start of this README I told you Aocla started from an Advent of
+Code puzzles. The Puzzle could be solved by parsing representations
+of lists like that, and then writing a comparison function for
+the representations of the lists (well, actually this is how I solved it,
+but one could even take the approach of comparing *while* parsing,
+probably). This is an example of such lists:
+
+    [1,[2,[3,[4,[5,6,7]]]],8,9]
+
+Parsing such lists representations was not too hard, however this is
+not single-level object, as it has elements that are sub lists. So
+a recursive parser was the most obvious solution. This is what I wrote
+back then, the 13th of December:
+
+    /* This describes our elf object type. It can be used to represent
+     * nested lists of lists and/or integers. */
+    #define ELFOBJ_TYPE_INT  0
+    #define ELFOBJ_TYPE_LIST 1
+    typedef struct elfobj {
+	int type;       /* ELFOBJ_TYPE_... */
+	union {
+	    int i;      /* Integer value. */
+	    struct {    /* List value. */
+		struct elfobj **ele;
+		size_t len;
+	    } l;
+	} val;
+    } elfobj;
+
+Why `elfobj`? Well, because it was Christmas and AoC is about elves.
+The structure above is quite trivial, just two types and a union in order
+to represent both types.
+
+Let's see the parser:
+
+    /* Given the string 's' return the elfobj representing the list or
+     * NULL on syntax error. '*next' is set to the next byte to parse, after
+     * the current value was completely parsed. */
+    elfobj *parseList(const char *s, const char **next) {
+	elfobj *obj = elfalloc(sizeof(*obj));
+	while(isspace(s[0])) s++;
+	if (s[0] == '-' || isdigit(s[0])) {
+	    char buf[64];
+	    size_t len = 0;
+	    while((*s == '-' || isdigit(*s)) && len < sizeof(buf)-1)
+		buf[len++] = *s++;
+	    buf[len] = 0;
+	    obj->type = ELFOBJ_TYPE_INT;
+	    obj->val.i = atoi(buf);
+	    if (next) *next = s;
+	    return obj;
+	} else if (s[0] == '[') {
+	    obj->type = ELFOBJ_TYPE_LIST;
+	    obj->val.l.len = 0;
+	    obj->val.l.ele = NULL;
+	    s++;
+	    /* Parse comma separated elements. */
+	    while(1) {
+		/* The list may be empty, so we need to parse for "]"
+		 * ASAP. */
+		while(isspace(s[0])) s++;
+		if (s[0] == ']') {
+		    if (next) *next = s+1;
+		    return obj;
+		}
+
+		/* Parse the current sub-element recursively. */
+		const char *nextptr;
+		elfobj *element = parseList(s,&nextptr);
+		if (element == NULL) {
+		    freeElfObj(obj);
+		    return NULL;
+		}
+		obj->val.l.ele = elfrealloc(obj->val.l.ele,
+					    sizeof(elfobj*)*(obj->val.l.len+1));
+		obj->val.l.ele[obj->val.l.len++] = element;
+		s = nextptr; /* Continue from first byte not parsed. */
+
+		while(isspace(s[0])) s++;
+		if (s[0] == ']') continue; /* Will be handled by the loop. */
+		if (s[0] == ',') {
+		    s++;
+		    continue; /* Parse next element. */
+		}
+
+		/* Syntax error. */
+		freeElfObj(obj);
+		return NULL;
+	    }
+	    /* Syntax error (list not closed). */
+	    freeElfObj(obj);
+	    return NULL;
+	} else {
+	    /* In a serious program you don't printf() in the middle of
+	     * a function. Just return NULL. */
+	    fprintf(stderr,"Syntax error parsing '%s'\n", s);
+	    return NULL;
+	}
+	return obj;
+    }
+
+OK, what are the important parts of the above code? First: the parser is,
+as I already said, recursive. To parse each element of the list we call
+the same function again and again. This will make the magic of handling
+any complex nested list without having to do anything special. I know, I know.
+This is quite obvious for experienced enough programmers, but I claim it
+is still kinda of magic, like a Mandelbrot set, like standing with a mirror
+in front of another mirror admiring the infinite repeating images one
+inside the other. Recursion remains magic even when it was understood.
+
+--- work in progress ---
+
+
