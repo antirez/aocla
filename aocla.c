@@ -496,9 +496,13 @@ obj *deepCopy(obj *o) {
 /* This function performs a deep copy of the object if it has a refcount > 1.
  * The copy is returned. Otherwise if refcount is 1, the function returns
  * the same object we passed as argument. This is useful when we want to
- * modify a shared object. */
+ * modify a shared object.
+ *
+ * When the function returns a copy, the reference count of the original
+ * object is decremented, as the object logically lost one reference. */
 obj *getUnsharedObject(obj *o) {
     if (o->refcount > 1) {
+        release(o);
         return deepCopy(o);
     } else {
         return o;
@@ -568,6 +572,12 @@ obj *stackPop(aoclactx *ctx) {
 obj *stackPeek(aoclactx *ctx, size_t offset) {
     if (ctx->stacklen <= offset) return NULL;
     return ctx->stack[ctx->stacklen-1-offset];
+}
+
+/* Like stack peek, but instead of returning the object sets it. */
+void stackSet(aoclactx *ctx, size_t offset, obj *o) {
+    assert(ctx->stacklen > offset);
+    ctx->stack[ctx->stacklen-1-offset] = o;
 }
 
 /* Show the current content of the stack. */
@@ -1026,6 +1036,7 @@ int procCat(aoclactx *ctx) {
     obj *src = stackPop(ctx);
     obj *dst = stackPeek(ctx,0);
     dst = getUnsharedObject(dst);
+    stackSet(ctx,0,dst);
 
     if (src->type & (OBJ_TYPE_STRING|OBJ_TYPE_SYMBOL)) {
         dst->str.ptr = myrealloc(dst->str.ptr,dst->str.len+src->str.len+1);
@@ -1038,6 +1049,16 @@ int procCat(aoclactx *ctx) {
         dst->l.len += src->l.len;
     }
     release(src);
+    return 0;
+}
+
+// Turns the list on the stack into a tuple.
+int procMakeTuple(aoclactx *ctx) {
+    if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
+    obj *l = stackPop(ctx);
+    l = getUnsharedObject(l);
+    l->type = OBJ_TYPE_TUPLE;
+    stackPush(ctx,l);
     return 0;
 }
 
@@ -1074,6 +1095,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"get@",procListGetAt,NULL);
     addProc(ctx,"showstack",procShowStack,NULL);
     addProc(ctx,"cat",procCat,NULL);
+    addProc(ctx,"make-tuple",procMakeTuple,NULL);
 
     /* Since the point of this interpreter to be a short and understandable
      * programming example, we implement as much as possible in Aocla itself
