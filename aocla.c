@@ -1006,6 +1006,41 @@ int procListGetAt(aoclactx *ctx) {
     return 0;
 }
 
+/* cat -- Concatenates lists, tuples, strings.
+ * (a b) => (a#b) */
+int procCat(aoclactx *ctx) {
+    if (checkStackLen(ctx,2)) return 1;
+    if (ctx->stack[ctx->stacklen-1]->type !=
+        ctx->stack[ctx->stacklen-2]->type)
+    {
+        setError(ctx,NULL,"cat expects two objects of the same type");
+        return 1;
+    }
+
+    if (checkStackType(ctx,2,OBJ_TYPE_LIST|OBJ_TYPE_STRING|
+                             OBJ_TYPE_TUPLE|OBJ_TYPE_SYMBOL,
+                             OBJ_TYPE_LIST|OBJ_TYPE_STRING|
+                             OBJ_TYPE_TUPLE|OBJ_TYPE_SYMBOL))
+        return 1;
+
+    obj *src = stackPop(ctx);
+    obj *dst = stackPeek(ctx,0);
+    dst = getUnsharedObject(dst);
+
+    if (src->type & (OBJ_TYPE_STRING|OBJ_TYPE_SYMBOL)) {
+        dst->str.ptr = myrealloc(dst->str.ptr,dst->str.len+src->str.len+1);
+        memcpy(dst->str.ptr+dst->str.len,src->str.ptr,src->str.len+1);
+        dst->str.len += src->str.len;
+    } else {
+        for (size_t j = 0; j < src->l.len; j++) retain(src->l.ele[j]);
+        dst->l.ele = myrealloc(dst->l.ele,(dst->l.len+src->l.len)*sizeof(obj*));
+        memcpy(dst->l.ele+dst->l.len,src->l.ele,src->l.len*sizeof(obj*));
+        dst->l.len += src->l.len;
+    }
+    release(src);
+    return 0;
+}
+
 /* Show the current stack. Useful for debugging. */
 int procShowStack(aoclactx *ctx) {
     stackShow(ctx);
@@ -1038,6 +1073,7 @@ void loadLibrary(aoclactx *ctx) {
     addProc(ctx,"<-",procListAppend,NULL);
     addProc(ctx,"get@",procListGetAt,NULL);
     addProc(ctx,"showstack",procShowStack,NULL);
+    addProc(ctx,"cat",procCat,NULL);
 
     /* Since the point of this interpreter to be a short and understandable
      * programming example, we implement as much as possible in Aocla itself
@@ -1057,9 +1093,6 @@ void loadLibrary(aoclactx *ctx) {
 
     /* [1 2 3] rest => [2 3] */
     addProcString(ctx,"rest","[#t (f) [] (n) [[$f] [#f (f) drop] [$n -> (n)] ifelse] foreach $n]");
-
-    /* [1 2 3] [4 5 6] cat => [1 2 3 4 5 6] */
-    addProcString(ctx,"cat","[(a b) $b [$a -> (a)] foreach $a]");
 }
 
 /* ================================ CLI ===================================== */
