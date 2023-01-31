@@ -154,51 +154,211 @@ obvious if you have any Lisp background:
     aocla> [1 2 3] rest
     [2 3]
 
+*Note: cat also works with strings, tuples, symbols.*
+
 There is, of course, map:
 
     aocla> [1 2 3] [dup *] map
     [1 4 9]
 
-If you want to just do something with list elements, in an imperative way, you can use foreach:
+If you want to do something with list elements, in an imperative way, you can use foreach:
 
     aocla> [1 2 3] [printnl] foreach
     1
     2
     3
 
-And a few more, like `get@` to get a specific element in a given
-position, `sort`, to sort a list, and if I remember correctly nothing
-more about lists. And many of the above things are implemented inside the
-C source code of Aocla in Aocla language itself. This is, for instance,
-the implementation of `map`:
+There are a few more list procedures. `get@` to get a specific element in
+a given position, `sort`, to sort a list, and if I remember correctly nothing
+more about lists. Many of the above procedures are implemented inside the
+C source code of Aocla, in Aocla language itself. Others are implemented
+in C because of performance concerns or because it was simpler to do so.
+For instance, this is the implementation of `foreach`:
 
-    [(a b) // Concat list a and b.
-        $b [$a -> (a)] foreach // for each element of b, append to a.
-        $a // return a
-    ] 'cat def
+    [(l f) // list and function to call with each element.
+        $l len (e)  // Get list len in "e"
+        0 (j)       // j is our current index
+        [$j $e <] [
+            $l $j get@  // Get list[j]
+            $f upeval   // We want to evaluate in the context of the caller
+            $j 1 + (j)  // Go to the next index
+        ] while
+    ] 'foreach def
+
+As you can see from the above code, Aocla syntax also supports comments:
+anything from `//` to the end of the line is ignored.
 
 ## Conditionals
 
+Aocla conditionals are just `if` and `ifelse`. There is also a
+quite imperative looping construct, that is `while`. You could loop
+in the Scheme way, using recursion, but I like to give the language
+a Common Lisp vibe, where you can write imperative code, too.
 
+The words `if` and `ifelse` do what you could imagine:
+
+    aocla> 5 (a)
+    5
+    aocla> [$a 2 >] ["a is > 2" printnl] if
+    a is > 2
+
+So `if` takes two programs (two lists), one is evaluated to see if it is
+true or false. The other is executed only if the first program is true.
+
+The same is true for ifelse, but it takes three programs: condition, true-program, false-program:
+
+    aocla> 9 (a)
+    aocla> [$a 11 ==] ["11 reached" printnl] [$a 1 + (a)] ifelse
+    aocla> [$a 11 ==] ["11 reached" printnl] [$a 1 + (a)] ifelse
+    aocla> [$a 11 ==] ["11 reached" printnl] [$a 1 + (a)] ifelse
+    11 reached
+
+And finally, an example of while:
+
+    aocla> 10 [dup 0 >] [dup printnl 1 -] while
+    10
+    9
+    8
+    7
+    6
+    5
+    4
+    3
+    2
+    1
+
+Or, for a longer but more usual program making use of Aocla locals:
+
+    aocla> 10 (x) [$x 0 >] [$x printnl $x 1 - (x)] while
+    10
+    9
+    8
+    7
+    6
+    5
+    4
+    3
+    2
+    1
+
+Basically two programming styles are possible: one that uses the stack
+mainly in order to pass state from different procedures, and otherwise
+uses locals a lot for local state, and another one where almost everything
+will use the stack, like in FORTH, and locals will be used only from time
+to time when stack manipulation is less clear. For instance Imagine
+I've three values on the stack:
+
+    aocla> 1 2 3
+    1 2 3
+
+If I want to sum the first and the third, and leave the second one
+on the stack, even in a programming style where the code mainly uses
+the stack to hold state, one could write:
+
+    aocla> (a _ b) $_ $a $b +
+    2 4 
 
 ## Evaluating lists
 
+Words like `map` or `foreach` are written in Aocla itself. They are not 
+implemented in C, even if they could and probably should for performance
+reasons (and this is why `while` is implemented in C).
+
+In order to implement procedures that execute code, Aocla provides the
+`eval` built-in word. It just consumes the list on the top of the
+stack and evaluates it.
+
+    aocla> 5 [dup dup dup] eval
+    5 5 5 5
+
+In the above example we executed the list contaning the program that calls
+`dup` three times. Let's write a better example, a procedure that executes
+the same code a specified number of times:
+
+    [(n l)
+        [$n 0 >]
+        [$l eval $n 1 - (n)]
+        while
+    ] 'repeat def
+
+Example usage:
+
+    aocla> 3 ["Hello!" printnl] repeat
+    Hello!
+    Hello!
+    Hello!
+
 ## Eval and local variables
 
-Give a look at the quite imperative implementation of `map` inside Aocla:
+There is a problem with the above implementation of `repeat`, it does
+not mix well with local variables:
 
-    [(l f) // list and function to apply
-        $l len (e)  // Get list len in "e"
-        0 (j)       // j is our current index
-        []          // We will populate this empty list
-        [$j $e <] [
-            $l $j get@
-            $f upeval
-            swap ->
-            $j 1 + (j)
-        ] while
-    ] 'map def
+    aocla> 10 (x) 3 [$x printnl] repeat
+    Unbound local var: '$x' in eval:0  in unknown:0
+
+Here the problem is that once we call a new procedure, that is `repeat`,
+the local variable `x` no longer exist in the context of the called
+procedure. So when `repeat` evaluates our program we get an error.
+This is the only case where Aocla local variables make the semantics of
+Aocla more complex than other stack based languages without this feature.
+In order to solve the problem above, Aocla has a specialized form of
+`eval` that is called `upeval`: it executes a program in the context
+(stack frame, in low level terms) of the caller. Let's rewrite
+the `repeat` procedure using `upeval`:
+
+    [(n l)
+        [$n 0 >]
+        [$l upeval $n 1 - (n)]
+        while
+    ] 'repeat def
+
+After the change, it works as expected:
+
+    aocla> 10 (x) 3 [$x printnl] repeat
+    10
+    10
+    10
+
+Now, out of the blue, without even knowing how Aocla is implemented,
+let's check the C implementation of `uplevel`:
+
+    /* Like eval, but the code is evaluated in the stack frame of the calling
+     * procedure, if any. */
+    int procUpeval(aoclactx *ctx) {
+        if (checkStackType(ctx,1,OBJ_TYPE_LIST)) return 1;
+        obj *l = stackPop(ctx);
+        stackframe *saved = NULL;
+        if (ctx->frame->prev) {
+            saved = ctx->frame;
+            ctx->frame = ctx->frame->prev;
+        }
+        int retval = eval(ctx,l);
+        if (saved) ctx->frame = saved;
+        release(l);
+        return retval;
+    }
+
+What happens here is quite clear: we check to see if the stack contains
+a list, as top level element. If so, we capture that value in the variable
+`l`, then save the current stack frame, that contains our local variables
+for the current procedure, and substitute it with the *previous procedure*
+stack frame. Now we can call `eval()` and finally restore the original
+stack frame.
 
 ## Creating programs at runtime
+
+Aocla is homoiconic, as we already said earlier. Programs are
+represented with the same data structures that Aocla code can manipulate.
+Because of that, we can write programs writing programs. For instance let's
+create a program that creates a procedure incrementing a variable of
+the specified name.
+
+The procedure exects two elements on the stack: the name of the procedure
+we want to create, and the variable name that the procedure will increment:
+
+    proc-name, var-name
+
+
+
 
 # Aocla internals

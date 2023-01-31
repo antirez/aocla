@@ -1,5 +1,5 @@
-// List concatenation. This procedure is part of the standard
-// library.
+// List concatenation. This procedure is just an example, the standard
+// library "cat" is implemented in C.
 
 // [1 2 3] [4 5 6] cat => [1 2 3 4 5 6]
 [(a b)
