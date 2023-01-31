@@ -1058,6 +1058,7 @@ int procMakeTuple(aoclactx *ctx) {
     obj *l = stackPop(ctx);
     l = getUnsharedObject(l);
     l->type = OBJ_TYPE_TUPLE;
+    l->l.quoted = 0;
     stackPush(ctx,l);
     return 0;
 }
