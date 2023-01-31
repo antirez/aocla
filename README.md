@@ -506,6 +506,96 @@ is still kinda of magic, like a Mandelbrot set, like standing with a mirror
 in front of another mirror admiring the infinite repeating images one
 inside the other. Recursion remains magic even when it was understood.
 
+Second point to note: the function gets a pointer to a string, and returns
+the object parsed and the pointer to the start of the next object to parse,
+that is just at some offset inside the same list. This is a very comfortable
+way to write such a parser: we can call the same function again to get
+the next object in a loop to parse all the tokens and sub-tokens. And I'm
+saying tokens for a reason, because the same exact structure can be used
+also when writing tokenizers that just return tokens one after the other,
+without any conversion to object.
+
+Now, what I did was to take this program and make it the programming language
+you just learned about in the first part of this README. How? Well, to
+start I redefined a much more complex object type:
+
+    /* Type are defined so that each type ID is a different set bit, this way
+     * in checkStackType() we may ask the function to check if some argument
+     * is one among a list of types just bitwise-oring the type IDs together. */
+    #define OBJ_TYPE_INT    (1<<0)
+    #define OBJ_TYPE_LIST   (1<<1)
+    #define OBJ_TYPE_TUPLE  (1<<2)
+    #define OBJ_TYPE_STRING (1<<3)
+    #define OBJ_TYPE_SYMBOL (1<<4)
+    #define OBJ_TYPE_BOOL   (1<<5)
+    #define OBJ_TYPE_ANY    INT_MAX /* All bits set. For checkStackType(). */
+    typedef struct obj {
+	int type;       /* OBJ_TYPE_... */
+	int refcount;   /* Reference count. */
+	int line;       /* Source code line number where this was defined, or 0. */
+	union {
+	    int i;      /* Integer. Literal: 1234 */
+	    int istrue; /* Boolean. Literal: #t or #f */
+	    struct {    /* List or Tuple: Literal: [1 2 3 4] or (a b c) */
+		struct obj **ele;
+		size_t len;
+		int quoted; /* Used for quoted tuples. Don't capture vars if true.
+			       Just push the tuple on stack. */
+	    } l;
+	    struct {    /* Mutable string & unmutable symbol. */
+		char *ptr;
+		size_t len;
+		int quoted; /* Used for quoted symbols: when quoted they are
+			       not executed, but just pushed on the stack by
+			       eval(). */
+	    } str;
+	};
+    } obj;
+
+Well, important things to note, since this may look like just an extension
+of the original puzzle 13 code, but look at these differences:
+
+1. We now use reference counting. When the object is allocated, it gets a *refcount* of 1. Then the functions retain() and release() are used in order to increment the reference count when we store the same object elsewhere, or when we want to remove a reference. Finally the references drop to zero and the object gets freed.
+2. The object types now are all power of two. This means we can store or pass to functions multiple types at once in a single integer, just performing the bitwise ore. It's useful. No need for functions with a variable number of arguments just to pass many times.
+3. There is some information about the line number where a given object was defined in the source code. Aocla can be a toy, but a toy that will try to give you some stack trace if there is a runtime error.
+
+This is the release() function.
+
+    /* Recursively free an Aocla object, if the refcount just dropped to zero. */
+    void release(obj *o) {
+	if (o == NULL) return;
+	assert(o->refcount >= 0);
+	if (--o->refcount == 0) {
+	    switch(o->type) {
+	    case OBJ_TYPE_LIST:
+	    case OBJ_TYPE_TUPLE:
+		for (size_t j = 0; j < o->l.len; j++)
+		    release(o->l.ele[j]);
+		free(o->l.ele);
+		break;
+	    case OBJ_TYPE_SYMBOL:
+	    case OBJ_TYPE_STRING:
+		free(o->str.ptr);
+		break;
+	    default:
+		break;
+		/* Nothing special to free. */
+	    }
+	    free(o);
+	}
+    }
+
+Note that in this implementation deeply nested data structures will produce many recursive calls. This can be avoided using lazy freeing, but not needed for something like Aocla.
+
+So, thanks to our parser, we can take an Aocla program, in the form of a string, parse it and get an Aocla object (`obj*` type) back. Now, in order to run an Aocla program, we have to *execute* this object. Stack based languages are particularly simple to execute: we just go form left to right, and depending on the object type, we do a different action:
+
+* If the object is a symbol (and is not quoted, see the `quoted` field in the object structure), we try to lookup a procedure with that name, and if it exists we execute the procedure. How? By recursively execute the list bound to the symbol.
+* If the object is a tuple with single characters elements, we capture the variables on the stack.
+* If it's a symbol starting with `$` we push the variable on the stack, or if the variable is not bound we raise an error.
+* For any other type of object, we just push it on the stack.
+
+The function responsible to execute the program is called `eval()`, and is so short we can put it fully here, but I'll present the function split in different parts, to explain each one carefully.
+
 --- work in progress ---
 
 

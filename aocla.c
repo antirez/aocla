@@ -636,6 +636,8 @@ int eval(aoclactx *ctx, obj *l) {
                 return 1;
             }
 
+            /* Bind each variable to the corresponding locals array,
+             * removing it from the stack. */
             ctx->stacklen -= o->l.len;
             for (size_t i = 0; i < o->l.len; i++) {
                 int idx = o->l.ele[i]->str.ptr[0];
