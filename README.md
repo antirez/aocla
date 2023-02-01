@@ -63,7 +63,7 @@ We said that symbols normally trigger a procedure call. But symbols can also be 
 
     'Hello printnl
 
-The `printnl` procedure prints the last element in the stack and also prints a newline character, so the above program will just print `Hello` on the screen. You may wonder what's the point of quoting symbols. After all, you could just use strings, but later we'll see how this is important in order to write Aocla programs that write Aocla programs.
+The `printnl` procedure prints the last element on the stack and also prints a newline character, so the above program will just print `Hello` on the screen. You may wonder what's the point of quoting symbols. After all, you could just use strings, but later we'll see how this is important in order to write Aocla programs that write Aocla programs.
 
 Quoting also works with tuples, so if you want to push the tuple `(a b c)` on the stack, instead of capturing the variables a, b and c, you can write:
 
@@ -121,8 +121,8 @@ Then it is possible to add elements to the tail or the head of the list using th
     aocla> 2 swap ->
     [1 2] 
 
-Note that these procedures are designed to insert the last element in the
-stack into the list that is the penultimate element in the stack, so,
+Note that these procedures are designed to insert the last element on the
+stack into the list that is the penultimate element on the stack, so,
 in this specific case, we have to swap the order of the last two elements
 on the stack before calling `->`. It is possible to design these procedures
 in a different way, that is: to the expect `list, element` on the stack instead
@@ -823,7 +823,7 @@ However, as soon as some operation is going to alter an object whose
 reference count is greater than one, it gets copied first, only later modified.
 
 In the above program, the list reference count is 2, because the same list
-is stored in the array of local variables and in the stack. Let's
+is stored in the array of local variables and on the stack. Let's
 give a look at the implementation of the `->` operator:
 
     /* Implements -> and <-, appending element x in list with stack
