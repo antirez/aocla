@@ -413,20 +413,20 @@ not single-level object, as it has elements that are sub lists. So
 a recursive parser was the most obvious solution. This is what I wrote
 back then, the 13th of December:
 
-        /* This describes our elf object type. It can be used to represent
-         * nested lists of lists and/or integers. */
-        #define ELFOBJ_TYPE_INT  0
-        #define ELFOBJ_TYPE_LIST 1
-        typedef struct elfobj {
-            int type;       /* ELFOBJ_TYPE_... */
-            union {
-                int i;      /* Integer value. */
-                struct {    /* List value. */
-                    struct elfobj **ele;
-                    size_t len;
-                } l;
-            } val;
-        } elfobj;
+    /* This describes our elf object type. It can be used to represent
+     * nested lists of lists and/or integers. */
+    #define ELFOBJ_TYPE_INT  0
+    #define ELFOBJ_TYPE_LIST 1
+    typedef struct elfobj {
+        int type;       /* ELFOBJ_TYPE_... */
+        union {
+            int i;      /* Integer value. */
+            struct {    /* List value. */
+                struct elfobj **ele;
+                size_t len;
+            } l;
+        } val;
+    } elfobj;
 
 Why `elfobj`? Well, because it was Christmas and AoC is about elves.
 The structure above is quite trivial, just two types and a union in order
@@ -434,71 +434,71 @@ to represent both types.
 
 Let's see the parser:
 
-        /* Given the string 's' return the elfobj representing the list or
-         * NULL on syntax error. '*next' is set to the next byte to parse, after
-         * the current value was completely parsed. */
-        elfobj *parseList(const char *s, const char **next) {
-            elfobj *obj = elfalloc(sizeof(*obj));
-            while(isspace(s[0])) s++;
-            if (s[0] == '-' || isdigit(s[0])) {
-                char buf[64];
-                size_t len = 0;
-                while((*s == '-' || isdigit(*s)) && len < sizeof(buf)-1)
-                    buf[len++] = *s++;
-                buf[len] = 0;
-                obj->type = ELFOBJ_TYPE_INT;
-                obj->val.i = atoi(buf);
-                if (next) *next = s;
-                return obj;
-            } else if (s[0] == '[') {
-                obj->type = ELFOBJ_TYPE_LIST;
-                obj->val.l.len = 0;
-                obj->val.l.ele = NULL;
-                s++;
-                /* Parse comma separated elements. */
-                while(1) {
-                    /* The list may be empty, so we need to parse for "]"
-                     * ASAP. */
-                    while(isspace(s[0])) s++;
-                    if (s[0] == ']') {
-                        if (next) *next = s+1;
-                        return obj;
-                    }
+    /* Given the string 's' return the elfobj representing the list or
+     * NULL on syntax error. '*next' is set to the next byte to parse, after
+     * the current value was completely parsed. */
+    elfobj *parseList(const char *s, const char **next) {
+        elfobj *obj = elfalloc(sizeof(*obj));
+        while(isspace(s[0])) s++;
+        if (s[0] == '-' || isdigit(s[0])) {
+            char buf[64];
+            size_t len = 0;
+            while((*s == '-' || isdigit(*s)) && len < sizeof(buf)-1)
+                buf[len++] = *s++;
+            buf[len] = 0;
+            obj->type = ELFOBJ_TYPE_INT;
+            obj->val.i = atoi(buf);
+            if (next) *next = s;
+            return obj;
+        } else if (s[0] == '[') {
+            obj->type = ELFOBJ_TYPE_LIST;
+            obj->val.l.len = 0;
+            obj->val.l.ele = NULL;
+            s++;
+            /* Parse comma separated elements. */
+            while(1) {
+                /* The list may be empty, so we need to parse for "]"
+                 * ASAP. */
+                while(isspace(s[0])) s++;
+                if (s[0] == ']') {
+                    if (next) *next = s+1;
+                    return obj;
+                }
 
-                    /* Parse the current sub-element recursively. */
-                    const char *nextptr;
-                    elfobj *element = parseList(s,&nextptr);
-                    if (element == NULL) {
-                        freeElfObj(obj);
-                        return NULL;
-                    }
-                    obj->val.l.ele = elfrealloc(obj->val.l.ele,
-                                                sizeof(elfobj*)*(obj->val.l.len+1));
-                    obj->val.l.ele[obj->val.l.len++] = element;
-                    s = nextptr; /* Continue from first byte not parsed. */
-
-                    while(isspace(s[0])) s++;
-                    if (s[0] == ']') continue; /* Will be handled by the loop. */
-                    if (s[0] == ',') {
-                        s++;
-                        continue; /* Parse next element. */
-                    }
-
-                    /* Syntax error. */
+                /* Parse the current sub-element recursively. */
+                const char *nextptr;
+                elfobj *element = parseList(s,&nextptr);
+                if (element == NULL) {
                     freeElfObj(obj);
                     return NULL;
                 }
-                /* Syntax error (list not closed). */
+                obj->val.l.ele = elfrealloc(obj->val.l.ele,
+                                            sizeof(elfobj*)*(obj->val.l.len+1));
+                obj->val.l.ele[obj->val.l.len++] = element;
+                s = nextptr; /* Continue from first byte not parsed. */
+
+                while(isspace(s[0])) s++;
+                if (s[0] == ']') continue; /* Will be handled by the loop. */
+                if (s[0] == ',') {
+                    s++;
+                    continue; /* Parse next element. */
+                }
+
+                /* Syntax error. */
                 freeElfObj(obj);
                 return NULL;
-            } else {
-                /* In a serious program you don't printf() in the middle of
-                 * a function. Just return NULL. */
-                fprintf(stderr,"Syntax error parsing '%s'\n", s);
-                return NULL;
             }
-            return obj;
+            /* Syntax error (list not closed). */
+            freeElfObj(obj);
+            return NULL;
+        } else {
+            /* In a serious program you don't printf() in the middle of
+             * a function. Just return NULL. */
+            fprintf(stderr,"Syntax error parsing '%s'\n", s);
+            return NULL;
         }
+        return obj;
+    }
 
 OK, what are the important parts of the above code? First: the parser is,
 as I already said, recursive. To parse each element of the list we call
@@ -522,38 +522,38 @@ Now, what I did was to take this program and make it the programming language
 you just learned about in the first part of this README. How? Well, to
 start I redefined a much more complex object type:
 
-        /* Type are defined so that each type ID is a different set bit, this way
-         * in checkStackType() we may ask the function to check if some argument
-         * is one among a list of types just bitwise-oring the type IDs together. */
-        #define OBJ_TYPE_INT    (1<<0)
-        #define OBJ_TYPE_LIST   (1<<1)
-        #define OBJ_TYPE_TUPLE  (1<<2)
-        #define OBJ_TYPE_STRING (1<<3)
-        #define OBJ_TYPE_SYMBOL (1<<4)
-        #define OBJ_TYPE_BOOL   (1<<5)
-        #define OBJ_TYPE_ANY    INT_MAX /* All bits set. For checkStackType(). */
-        typedef struct obj {
-            int type;       /* OBJ_TYPE_... */
-            int refcount;   /* Reference count. */
-            int line;       /* Source code line number where this was defined, or 0. */
-            union {
-                int i;      /* Integer. Literal: 1234 */
-                int istrue; /* Boolean. Literal: #t or #f */
-                struct {    /* List or Tuple: Literal: [1 2 3 4] or (a b c) */
-                    struct obj **ele;
-                    size_t len;
-                    int quoted; /* Used for quoted tuples. Don't capture vars if true.
-                                   Just push the tuple on stack. */
-                } l;
-                struct {    /* Mutable string & unmutable symbol. */
-                    char *ptr;
-                    size_t len;
-                    int quoted; /* Used for quoted symbols: when quoted they are
-                                   not executed, but just pushed on the stack by
-                                   eval(). */
-                } str;
-            };
-        } obj;
+    /* Type are defined so that each type ID is a different set bit, this way
+     * in checkStackType() we may ask the function to check if some argument
+     * is one among a list of types just bitwise-oring the type IDs together. */
+    #define OBJ_TYPE_INT    (1<<0)
+    #define OBJ_TYPE_LIST   (1<<1)
+    #define OBJ_TYPE_TUPLE  (1<<2)
+    #define OBJ_TYPE_STRING (1<<3)
+    #define OBJ_TYPE_SYMBOL (1<<4)
+    #define OBJ_TYPE_BOOL   (1<<5)
+    #define OBJ_TYPE_ANY    INT_MAX /* All bits set. For checkStackType(). */
+    typedef struct obj {
+        int type;       /* OBJ_TYPE_... */
+        int refcount;   /* Reference count. */
+        int line;       /* Source code line number where this was defined, or 0. */
+        union {
+            int i;      /* Integer. Literal: 1234 */
+            int istrue; /* Boolean. Literal: #t or #f */
+            struct {    /* List or Tuple: Literal: [1 2 3 4] or (a b c) */
+                struct obj **ele;
+                size_t len;
+                int quoted; /* Used for quoted tuples. Don't capture vars if true.
+                               Just push the tuple on stack. */
+            } l;
+            struct {    /* Mutable string & unmutable symbol. */
+                char *ptr;
+                size_t len;
+                int quoted; /* Used for quoted symbols: when quoted they are
+                               not executed, but just pushed on the stack by
+                               eval(). */
+            } str;
+        };
+    } obj;
 
 Well, important things to note, since this may look like just an extension
 of the original puzzle 13 code, but look at these differences:
@@ -564,29 +564,29 @@ of the original puzzle 13 code, but look at these differences:
 
 This is the release() function.
 
-        /* Recursively free an Aocla object, if the refcount just dropped to zero. */
-        void release(obj *o) {
-            if (o == NULL) return;
-            assert(o->refcount >= 0);
-            if (--o->refcount == 0) {
-                switch(o->type) {
-                case OBJ_TYPE_LIST:
-                case OBJ_TYPE_TUPLE:
-                    for (size_t j = 0; j < o->l.len; j++)
-                        release(o->l.ele[j]);
-                    free(o->l.ele);
-                    break;
-                case OBJ_TYPE_SYMBOL:
-                case OBJ_TYPE_STRING:
-                    free(o->str.ptr);
-                    break;
-                default:
-                    break;
-                    /* Nothing special to free. */
-                }
-                free(o);
+    /* Recursively free an Aocla object, if the refcount just dropped to zero. */
+    void release(obj *o) {
+        if (o == NULL) return;
+        assert(o->refcount >= 0);
+        if (--o->refcount == 0) {
+            switch(o->type) {
+            case OBJ_TYPE_LIST:
+            case OBJ_TYPE_TUPLE:
+                for (size_t j = 0; j < o->l.len; j++)
+                    release(o->l.ele[j]);
+                free(o->l.ele);
+                break;
+            case OBJ_TYPE_SYMBOL:
+            case OBJ_TYPE_STRING:
+                free(o->str.ptr);
+                break;
+            default:
+                break;
+                /* Nothing special to free. */
             }
+            free(o);
         }
+    }
 
 Note that in this implementation deeply nested data structures will produce many recursive calls. This can be avoided using lazy freeing, but not needed for something like Aocla.
 
@@ -599,137 +599,137 @@ So, thanks to our parser, we can take an Aocla program, in the form of a string,
 
 The function responsible to execute the program is called `eval()`, and is so short we can put it fully here, but I'll present the function split in different parts, to explain each one carefully. I will start showing just the first three lines, as they already tell us something.
 
-        int eval(aoclactx *ctx, obj *l) {
-            assert (l->type == OBJ_TYPE_LIST);
+    int eval(aoclactx *ctx, obj *l) {
+        assert (l->type == OBJ_TYPE_LIST);
 
-            for (size_t j = 0; j < l->l.len; j++) {
+        for (size_t j = 0; j < l->l.len; j++) {
 
 Here there are three things going on. Eval() takes a context and a list. The list is our program, and it is scanned left-to-right, as Aocla programs are executed left to right, word by word. So all is obvious but the context, what is an execution context for our program?
 
-        /* Interpreter state. */
-        #define ERRSTR_LEN 256
-        typedef struct aoclactx {
-            size_t stacklen;        /* Stack current len. */
-            obj **stack;
-            aproc *proc;            /* Defined procedures. */
-            stackframe *frame;      /* Stack frame with locals. */
-            /* Syntax error context. */
-            char errstr[ERRSTR_LEN]; /* Syntax error or execution error string. */
-        } aoclactx;
+    /* Interpreter state. */
+    #define ERRSTR_LEN 256
+    typedef struct aoclactx {
+        size_t stacklen;        /* Stack current len. */
+        obj **stack;
+        aproc *proc;            /* Defined procedures. */
+        stackframe *frame;      /* Stack frame with locals. */
+        /* Syntax error context. */
+        char errstr[ERRSTR_LEN]; /* Syntax error or execution error string. */
+    } aoclactx;
 
 It contains the following elements:
 1. The stack. Aocla is a stack based language, so we need a stack where to push and pop Aocla objects.
 2. A list of procedures: lists bound to symbols, via the `def` word.
 3. A stack frame, that is just what contains our local variables:
 
-        /* We have local vars, so we need a stack frame. We start with a top level
-         * stack frame. Each time a procedure is called, we create a new stack frame
-         * and free it once the procedure returns. */
-        #define AOCLA_NUMVARS 256
-        typedef struct stackframe {
-            obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
-            aproc *curproc;            /* Current procedure executing or NULL.  */
-            int curline;               /* Current line number during execution. */
-            struct stackframe *prev;   /* Upper level stack frame or NULL. */
-        } stackframe;
+    /* We have local vars, so we need a stack frame. We start with a top level
+     * stack frame. Each time a procedure is called, we create a new stack frame
+     * and free it once the procedure returns. */
+    #define AOCLA_NUMVARS 256
+    typedef struct stackframe {
+        obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
+        aproc *curproc;            /* Current procedure executing or NULL.  */
+        int curline;               /* Current line number during execution. */
+        struct stackframe *prev;   /* Upper level stack frame or NULL. */
+    } stackframe;
 
 The stack frame has a pointer to the previous stack frame. This is useful both in order to implement `upeval` and to show a stack trace when an exception happens and the program is halted.
 
 We can continue looking at eval() now. We stopped at the `for` loop, so now we are inside the iteration doing something with each element of the list:
 
-        obj *o = l->l.ele[j];
-        aproc *proc;
-        ctx->frame->curline = o->line;
+    obj *o = l->l.ele[j];
+    aproc *proc;
+    ctx->frame->curline = o->line;
 
-        switch(o->type) {
-        case OBJ_TYPE_TUPLE:                /* Capture variables. */
-            /* Quoted tuples just get pushed on the stack, losing
-             * their quoted status. */
-            if (o->l.quoted) {
-                obj *notq = deepCopy(o);
-                notq->l.quoted = 0;
-                stackPush(ctx,notq);
-                break;
-            }
-
-            if (ctx->stacklen < o->l.len) {
-                setError(ctx,o->l.ele[ctx->stacklen]->str.ptr,
-                    "Out of stack while capturing local");
-                return 1;
-            }
-
-            /* Bind each variable to the corresponding locals array,
-             * removing it from the stack. */
-            ctx->stacklen -= o->l.len;
-            for (size_t i = 0; i < o->l.len; i++) {
-                int idx = o->l.ele[i]->str.ptr[0];
-                release(ctx->frame->locals[idx]);
-                ctx->frame->locals[idx] =
-                    ctx->stack[ctx->stacklen+i];
-            }
+    switch(o->type) {
+    case OBJ_TYPE_TUPLE:                /* Capture variables. */
+        /* Quoted tuples just get pushed on the stack, losing
+         * their quoted status. */
+        if (o->l.quoted) {
+            obj *notq = deepCopy(o);
+            notq->l.quoted = 0;
+            stackPush(ctx,notq);
             break;
+        }
+
+        if (ctx->stacklen < o->l.len) {
+            setError(ctx,o->l.ele[ctx->stacklen]->str.ptr,
+                "Out of stack while capturing local");
+            return 1;
+        }
+
+        /* Bind each variable to the corresponding locals array,
+         * removing it from the stack. */
+        ctx->stacklen -= o->l.len;
+        for (size_t i = 0; i < o->l.len; i++) {
+            int idx = o->l.ele[i]->str.ptr[0];
+            release(ctx->frame->locals[idx]);
+            ctx->frame->locals[idx] =
+                ctx->stack[ctx->stacklen+i];
+        }
+        break;
 
 The essence of the loop is a bit `switch` statement doing something different depending on the object type. The object is just the current element of the list. The first case, is the tuple. Tuples capture local variables, unless they are quoted like this:
 
-        (a b c)  // Normal tuple -- This will capture variables
-        `(a b c) // Quoted tuple -- This will be pushed on the stack
+    (a b c)  // Normal tuple -- This will capture variables
+    `(a b c) // Quoted tuple -- This will be pushed on the stack
 
 So if the tuple is not quoted, we check if there are enough stack elements
 according to the tuple length. Then, element after element, we move objects
 from the Aocla stack to the stack frame, into the array representing the locals. Note that there could be already an object bound to a given local, so we `release()` it before the new assignment.
 
-        case OBJ_TYPE_SYMBOL:
-            /* Quoted symbols don't generate a procedure call, but like
-             * any other object they get pushed on the stack. */
-            if (o->str.quoted) {
-                obj *notq = deepCopy(o);
-                notq->str.quoted = 0;
-                stackPush(ctx,notq);
-                break;
-            }
+    case OBJ_TYPE_SYMBOL:
+        /* Quoted symbols don't generate a procedure call, but like
+         * any other object they get pushed on the stack. */
+        if (o->str.quoted) {
+            obj *notq = deepCopy(o);
+            notq->str.quoted = 0;
+            stackPush(ctx,notq);
+            break;
+        }
 
-            /* Not quoted symbols get looked up and executed if they
-             * don't start with "$". Otherwise are handled as locals
-             * push on the stack. */
-            if (o->str.ptr[0] == '$') {     /* Push local var. */
-                int idx = o->str.ptr[1];
-                if (ctx->frame->locals[idx] == NULL) {
-                    setError(ctx,o->str.ptr, "Unbound local var");
-                    return 1;
-                }
-                stackPush(ctx,ctx->frame->locals[idx]);
-                retain(ctx->frame->locals[idx]);
+        /* Not quoted symbols get looked up and executed if they
+         * don't start with "$". Otherwise are handled as locals
+         * push on the stack. */
+        if (o->str.ptr[0] == '$') {     /* Push local var. */
+            int idx = o->str.ptr[1];
+            if (ctx->frame->locals[idx] == NULL) {
+                setError(ctx,o->str.ptr, "Unbound local var");
+                return 1;
+            }
+            stackPush(ctx,ctx->frame->locals[idx]);
+            retain(ctx->frame->locals[idx]);
 
 For symbols, as usually we check if the symbol is quoted, an in such case we just push it on the stack. Otherwise, we handle two different cases. The above is the one where symbol names start with a `$`. It is, basically, the reverse of
 what we saw earlier in tuples capturing local vars. This time the local variable is transferred to the stack. However *we still take the reference* in the local variable array, as the program may want to push the same variable again and again, so, after pushing the object on the stack, we have to call `retain()` to increment the reference count of the object.
 
 If the symbol does not start with `$`, then it's a procedure call:
 
-	} else {                        /* Call procedure. */
-	    proc = lookupProc(ctx,o->str.ptr);
-	    if (proc == NULL) {
-		setError(ctx,o->str.ptr,
-		    "Symbol not bound to procedure");
-		return 1;
-	    }
-	    if (proc->cproc) {
-		/* Call a procedure implemented in C. */
-		aproc *prev = ctx->frame->curproc;
-		ctx->frame->curproc = proc;
-		int err = proc->cproc(ctx);
-		ctx->frame->curproc = prev;
-		if (err) return err;
-	    } else {
-		/* Call a procedure implemented in Aocla. */
-		stackframe *oldsf = ctx->frame;
-		ctx->frame = newStackFrame(ctx);
-		ctx->frame->curproc = proc;
-		int err = eval(ctx,proc->proc);
-		freeStackFrame(ctx->frame);
-		ctx->frame = oldsf;
-		if (err) return err;
-	    }
-	}
+    } else {                        /* Call procedure. */
+        proc = lookupProc(ctx,o->str.ptr);
+        if (proc == NULL) {
+            setError(ctx,o->str.ptr,
+                "Symbol not bound to procedure");
+            return 1;
+        }
+        if (proc->cproc) {
+            /* Call a procedure implemented in C. */
+            aproc *prev = ctx->frame->curproc;
+            ctx->frame->curproc = proc;
+            int err = proc->cproc(ctx);
+            ctx->frame->curproc = prev;
+            if (err) return err;
+        } else {
+            /* Call a procedure implemented in Aocla. */
+            stackframe *oldsf = ctx->frame;
+            ctx->frame = newStackFrame(ctx);
+            ctx->frame->curproc = proc;
+            int err = eval(ctx,proc->proc);
+            freeStackFrame(ctx->frame);
+            ctx->frame = oldsf;
+            if (err) return err;
+        }
+    }
 
 The `lookupProc()` function just scans a linked list of procedures
 and returns a list object or, if there is no such procedure defined, NULL.
@@ -745,42 +745,42 @@ of local variables. The scope of local variables, in Aocla, is the
 lifetime of the procedure call, like in many other languages. So before
 calling al Aocla procedure we allocate a new stack frame with `newStackFrame()`, then we call `eval()`, free the stack frame and store the old one. Procedures implemented in C don't need a stack frame, as they will not make any use of Aocla local variables.
 
-        default:
-            stackPush(ctx,o);
-            retain(o);
-            break;
+    default:
+        stackPush(ctx,o);
+        retain(o);
+        break;
 
 This is the final, default behavior for all the other objects. They get pushed on the stack, and that's it.
 
 Let's see how Aocla C-coded procedures are implemented, by observing the
 C function implementing basic mathematical operations such as +, -, ...
 
-        /* Implements +, -, *, %, ... */
-        int procBasicMath(aoclactx *ctx) {
-            if (checkStackType(ctx,2,OBJ_TYPE_INT,OBJ_TYPE_INT)) return 1;
-            obj *b = stackPop(ctx);
-            obj *a = stackPop(ctx);
+    /* Implements +, -, *, %, ... */
+    int procBasicMath(aoclactx *ctx) {
+        if (checkStackType(ctx,2,OBJ_TYPE_INT,OBJ_TYPE_INT)) return 1;
+        obj *b = stackPop(ctx);
+        obj *a = stackPop(ctx);
 
-            int res;
-            const char *fname = ctx->frame->curproc->name;
-            if (fname[0] == '+' && fname[1] == 0) res = a->i + b->i;
-            if (fname[0] == '-' && fname[1] == 0) res = a->i - b->i;
-            if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
-            if (fname[0] == '/' && fname[1] == 0) res = a->i / b->i;
-            stackPush(ctx,newInt(res));
-            release(a);
-            release(b);
-            return 0;
-        }
+        int res;
+        const char *fname = ctx->frame->curproc->name;
+        if (fname[0] == '+' && fname[1] == 0) res = a->i + b->i;
+        if (fname[0] == '-' && fname[1] == 0) res = a->i - b->i;
+        if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
+        if (fname[0] == '/' && fname[1] == 0) res = a->i / b->i;
+        stackPush(ctx,newInt(res));
+        release(a);
+        release(b);
+        return 0;
+    }
 
 Here we cheat: the code to implement each procedure would be almost the same so we check the name of the procedure called, and bind all the operators to the same function:
 
-        void loadLibrary(aoclactx *ctx) {
-            addProc(ctx,"+",procBasicMath,NULL);
-            addProc(ctx,"-",procBasicMath,NULL);
-            addProc(ctx,"*",procBasicMath,NULL);
-            addProc(ctx,"/",procBasicMath,NULL);
-            ...
+    void loadLibrary(aoclactx *ctx) {
+        addProc(ctx,"+",procBasicMath,NULL);
+        addProc(ctx,"-",procBasicMath,NULL);
+        addProc(ctx,"*",procBasicMath,NULL);
+        addProc(ctx,"/",procBasicMath,NULL);
+        ...
 
 The `procBasicMath()` is quite self-documenting, I guess. The proof of that
 is that I didn't add any comment inside the function. It checks the type
@@ -796,9 +796,9 @@ are forth a few more paragraphs of this README.
 
 Imagine the execution of the following Aocla program:
 
-	[1 2 3] (x)	// The varialbe x contains the list now
-	4 $x ->		// Now the stack contains the list [1 2 3 4]
-	$x		// What will be x now? [1 2 3] or [1 2 3 4]?
+    [1 2 3] (x)	// The varialbe x contains the list now
+    4 $x ->		// Now the stack contains the list [1 2 3 4]
+    $x		// What will be x now? [1 2 3] or [1 2 3 4]?
 
 Well, Aocla is designed to be kinda a *pure* language: words manipulate
 objects by taking them from the stack and pushing new objects to the
@@ -823,50 +823,50 @@ In the above program, the list reference count is 2, because the same list
 is stored in the array of local variables and in the stack. Let's
 give a look at the implementation of the `->` operator:
 
-        /* Implements -> and <-, appending element x in list with stack
-         *
-         * (x [1 2 3]) => ([1 2 3 x]) | ([x 1 2 3])
-         *
-         * <- is very inefficient as it memmoves all N elements. */
-        int procListAppend(aoclactx *ctx) {
-            int tail = ctx->frame->curproc->name[0] == '-';     /* Append on tail? */
-            if (checkStackType(ctx,2,OBJ_TYPE_ANY,OBJ_TYPE_LIST)) return 1;
-            obj *l = getUnsharedObject(stackPop(ctx));
-            obj *ele = stackPop(ctx);
-            l->l.ele = myrealloc(l->l.ele,sizeof(obj*)*(l->l.len+1));
-            if (tail) {
-                l->l.ele[l->l.len] = ele;
-            } else {
-                memmove(l->l.ele+1,l->l.ele,sizeof(obj*)*l->l.len);
-                l->l.ele[0] = ele;
-            }
-            l->l.len++;
-            stackPush(ctx,l);
-            return 0;
+    /* Implements -> and <-, appending element x in list with stack
+     *
+     * (x [1 2 3]) => ([1 2 3 x]) | ([x 1 2 3])
+     *
+     * <- is very inefficient as it memmoves all N elements. */
+    int procListAppend(aoclactx *ctx) {
+        int tail = ctx->frame->curproc->name[0] == '-';     /* Append on tail? */
+        if (checkStackType(ctx,2,OBJ_TYPE_ANY,OBJ_TYPE_LIST)) return 1;
+        obj *l = getUnsharedObject(stackPop(ctx));
+        obj *ele = stackPop(ctx);
+        l->l.ele = myrealloc(l->l.ele,sizeof(obj*)*(l->l.len+1));
+        if (tail) {
+            l->l.ele[l->l.len] = ele;
+        } else {
+            memmove(l->l.ele+1,l->l.ele,sizeof(obj*)*l->l.len);
+            l->l.ele[0] = ele;
         }
+        l->l.len++;
+        stackPush(ctx,l);
+        return 0;
+    }
 
 The interesting like here is the following one:
 
-        obj *l = getUnsharedObject(stackPop(ctx));
+    obj *l = getUnsharedObject(stackPop(ctx));
 
 We want an object that is not shared, right? This function will abstract
 the work for us. Let's check, in turn, its implementation:
 
-        obj *getUnsharedObject(obj *o) {
-            if (o->refcount > 1) {
-                release(o);
-                return deepCopy(o);
-            } else {
-                return o;
-            }
+    obj *getUnsharedObject(obj *o) {
+        if (o->refcount > 1) {
+            release(o);
+            return deepCopy(o);
+        } else {
+            return o;
         }
+    }
 
 So if the object is already unshared (its *refcount* is one), just return it as it is. Otherwise create a copy and remove a reference from the original object. This may look odd, but think at it: the invariant here should be that the caller of this function is the only owner of this object. If we want the caller to be able to abstract totally what happened inside the function, if the object was shared and we returned the caller a copy, the reference the caller had for the old object should be gone. Let's look at the following example:
 
-	obj *o = stackPop(ctx);
-        o = getUnsharedObject(o);
-	doSomethingThatChanges(o);
-	stackPush(ctx,o);
+    obj *o = stackPop(ctx);
+    o = getUnsharedObject(o);
+    doSomethingThatChanges(o);
+    stackPush(ctx,o);
 
 Stack pop and push functions don't change the reference counting of the object,
 so if the object is not shared we get it with a single reference, change it,
