@@ -121,13 +121,13 @@ Then it is possible to add elements to the tail or the head of the list using th
     aocla> 2 swap ->
     [1 2] 
 
-Note that these procedures are designed to insert the last element on the
-stack into the list that is the penultimate element on the stack, so,
+Note that these procedures are designed to insert the penultimate element on the
+stack into the list that is the last element on the stack, so,
 in this specific case, we have to swap the order of the last two elements
 on the stack before calling `->`. It is possible to design these procedures
 in a different way, that is: to the expect `list, element` on the stack instead
 of `element, list`. There is no clear winner: one or the other approach is
-better or worse depending on the use case. In Aocla, local variables make
+better or worse depending on the use case (but I believe I didn't write enough Aocla code to really pick the best way). In Aocla, local variables make
 all this less important compared to other stack based languages. It is always
 possible to make things more explicit, like in the following example:
 
