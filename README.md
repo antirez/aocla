@@ -597,7 +597,7 @@ This is the release() function.
 
 Note that in this implementation, deeply nested data structures will produce many recursive calls. This can be avoided using *lazy freeing*, but that's not needed for something like Aocla. However some reader may want to search *lazy freeing* on the web.
 
-Thanks to our parser, we can take an Aocla program, in the form of a string, parse it and get an Aocla object (`obj*` type) back. Now, in order to run an Aocla program, we have to *execute* this object. Stack based languages are particularly simple to execute: we just go form left to right, and depending on the object type, we do different actions:
+Thanks to our parser (that is just a more complex version of the initial day 13 puzzle parser, and is not worth showing here), we can take an Aocla program, in the form of a string, parse it and get an Aocla object (`obj*` type) back. Now, in order to run an Aocla program, we have to *execute* this object. Stack based languages are particularly simple to execute: we just go form left to right, and depending on the object type, we do different actions:
 
 * If the object is a symbol (and is not quoted, see the `quoted` field in the object structure), we try to lookup a procedure with that name, and if it exists we execute the procedure. How? By recursively executing the list bound to the symbol.
 * If the object is a tuple with single characters elements, we capture the variables on the stack.
