@@ -1,15 +1,18 @@
 Aocla (Advent of Code inspired Language) is a toy stack-based programming
 language written as an extension of [day 13 Advent of Code 2022 puzzle](https://adventofcode.com/2022/day/13).
-After completing the coding exercise, I saw other solutions resorting to `eval` and thought they were missing the point. The puzzle seemed more hinted at writing parsers for nested objects.
+
+It all started with me doing Advent of Code for the first time in my life. I hadn't written a line of code for two years, busy, as I was, writing my [sci-fi novel](https://www.amazon.com/Wohpe-English-Rimmel-Salvatore-Sanfilippo-ebook/dp/B0BQ3HRDPF/). I felt I needed to start coding again, but I was without a project in my hands. The AoC puzzles helped quite a lot, at first, but they tend to become repetitive and a bit futile after some time. Then something interesting happened. After completing day 13, a puzzle about comparing nested lists, I saw many other solutions resorting to `eval`. They are missing the point, I thought. To me, the puzzle seemed an hint at writing parsers for nested objects.
 
 Now, a nice fact about parsers of lists with integers and nested
 lists is that they are dangerously near, if written in the proper way, to become interpreters of Lisp-alike or FORTH-alike toy programming languages.
 
-The gentle reader should be aware that I've a soft spot for [little languages](http://oldblog.antirez.com/page/picol.html). However, Picol was too much of a toy, while [Jim](http://jim.tcl.tk/index.html/doc/www/www/index.html) was too big as a coding example. I also like writing small programs that serve as [examples](https://github.com/antirez/kilo) of how you could design bigger programs, while retaining a manageable size. Don't took me wrong: it's not like I believe my code should be taken as an example, it's just that I learned a lot from such small programs, so, from time to time, I like writing new ones and sharing them. This time I wanted to obtain something of roughly the size of the Kilo editor, that is around ~1000 lines of code, showing the real world challenges arising when writing an actual interpreter for a programming language more complex than Picol. That's the result.
+The gentle reader should be aware that I've a soft spot for [little languages](http://oldblog.antirez.com/page/picol.html). However, Picol was too much of a toy, while [Jim](http://jim.tcl.tk/index.html/doc/www/www/index.html) was too big as a coding example. I also like writing small programs that serve as [examples](https://github.com/antirez/kilo) of how you could design bigger programs, while retaining a manageable size. Don't took me wrong: it's not like I believe my code should be taken as an example, it's just that I learned a lot from such small programs, so, from time to time, I like writing new ones and sharing them. This time I wanted to obtain something of roughly the size of the Kilo editor, that is around ~1000 lines of code, showing the real world challenges arising when writing an actual interpreter for a programming language more complex than Picol. That's the result, and it worked for me: after Aocla I started writing more and more code, and now [I've a project, too](https://github.com/antirez/protoview).
 
-This README will first explain the language briefly. Later we will talk extensively about the implementation and its design. Without counting comments, the Aocla implementation is less than 1000 lines of code, and the core itself is around 500 lines (the rest of the code is the library implementation, the REPL, and so forth): hopefully, you will find the code easy to follow even if you are not used to C and to writing interpreters. I tried to keep stuff simple, as I always do when I write code, for myself and the others having the misfortune of modifying them.
+## Let's start
 
-Not every feature I desired to have is implemented, and certain data types, like the string type, lack any useful procedure to work with them. This choice was made in order to avoid making the source code more complex than needed, and also, on my side, to avoid writing too much useless code, given that this language will never be used to write actual code. Besides, implementing some of the missing parts is a good exercise for the willing reader, assuming she or he are new to this kind of stuff.
+This README will first explain the language briefly. Later we will talk extensively about the implementation and its design. Without counting comments, the Aocla implementation is less than 1000 lines of code, and the core itself is around 500 lines (the rest of the code is the library implementation, the REPL, and other accessory parts): I hope you will find the code easy to follow even if you are not used to C and to writing interpreters. I tried to keep all simple, as I always do when I write code, for myself and the others having the misfortune of modifying it in the future.
+
+Not every feature I desired to have is implemented, and certain data types, like the string type, lack any useful procedure to work with them. This choice was made in order to avoid making the source code more complex than needed, and also, on my side, to avoid writing too much useless code, given that this language will never be used in the real world. Besides, implementing some of the missing parts is a good exercise for the willing reader, assuming she or he are new to this kind of stuff. Even with all this limitations, it is possible to write small working programs with Aocla, and that's all we need.
 
 # Aocla
 
@@ -594,8 +597,292 @@ So, thanks to our parser, we can take an Aocla program, in the form of a string,
 * If it's a symbol starting with `$` we push the variable on the stack, or if the variable is not bound we raise an error.
 * For any other type of object, we just push it on the stack.
 
-The function responsible to execute the program is called `eval()`, and is so short we can put it fully here, but I'll present the function split in different parts, to explain each one carefully.
+The function responsible to execute the program is called `eval()`, and is so short we can put it fully here, but I'll present the function split in different parts, to explain each one carefully. I will start showing just the first three lines, as they already tell us something.
 
---- work in progress ---
+    int eval(aoclactx *ctx, obj *l) {
+        assert (l->type == OBJ_TYPE_LIST);
 
+        for (size_t j = 0; j < l->l.len; j++) {
 
+Here there are three things going on. Eval() takes a context and a list. The list is our program, and it is scanned left-to-right, as Aocla programs are executed left to right, word by word. So all is obvious but the context, what is an execution context for our program?
+
+    /* Interpreter state. */
+    #define ERRSTR_LEN 256
+    typedef struct aoclactx {
+        size_t stacklen;        /* Stack current len. */
+        obj **stack;
+        aproc *proc;            /* Defined procedures. */
+        stackframe *frame;      /* Stack frame with locals. */
+        /* Syntax error context. */
+        char errstr[ERRSTR_LEN]; /* Syntax error or execution error string. */
+    } aoclactx;
+
+It contains the following elements:
+1. The stack. Aocla is a stack based language, so we need a stack where to push and pop Aocla objects.
+2. A list of procedures: lists bound to symbols, via the `def` word.
+3. A stack frame, that is just what contains our local variables:
+
+    /* We have local vars, so we need a stack frame. We start with a top level
+     * stack frame. Each time a procedure is called, we create a new stack frame
+     * and free it once the procedure returns. */
+    #define AOCLA_NUMVARS 256
+    typedef struct stackframe {
+        obj *locals[AOCLA_NUMVARS];/* Local var names are limited to a,b,c,...,z. */
+        aproc *curproc;            /* Current procedure executing or NULL.  */
+        int curline;               /* Current line number during execution. */
+        struct stackframe *prev;   /* Upper level stack frame or NULL. */
+    } stackframe;
+
+The stack frame has a pointer to the previous stack frame. This is useful both in order to implement `upeval` and to show a stack trace when an exception happens and the program is halted.
+
+We can continue looking at eval() now. We stopped at the `for` loop, so now we are inside the iteration doing something with each element of the list:
+
+    obj *o = l->l.ele[j];
+    aproc *proc;
+    ctx->frame->curline = o->line;
+
+    switch(o->type) {
+    case OBJ_TYPE_TUPLE:                /* Capture variables. */
+        /* Quoted tuples just get pushed on the stack, losing
+         * their quoted status. */
+        if (o->l.quoted) {
+            obj *notq = deepCopy(o);
+            notq->l.quoted = 0;
+            stackPush(ctx,notq);
+            break;
+        }
+
+        if (ctx->stacklen < o->l.len) {
+            setError(ctx,o->l.ele[ctx->stacklen]->str.ptr,
+                "Out of stack while capturing local");
+            return 1;
+        }
+
+        /* Bind each variable to the corresponding locals array,
+         * removing it from the stack. */
+        ctx->stacklen -= o->l.len;
+        for (size_t i = 0; i < o->l.len; i++) {
+            int idx = o->l.ele[i]->str.ptr[0];
+            release(ctx->frame->locals[idx]);
+            ctx->frame->locals[idx] =
+                ctx->stack[ctx->stacklen+i];
+        }
+        break;
+
+The essence of the loop is a bit `switch` statement doing something different depending on the object type. The object is just the current element of the list. The first case, is the tuple. Tuples capture local variables, unless they are quoted like this:
+
+    (a b c)  // Normal tuple -- This will capture variables
+    `(a b c) // Quoted tuple -- This will be pushed on the stack
+
+So if the tuple is not quoted, we check if there are enough stack elements
+according to the tuple length. Then, element after element, we move objects
+from the Aocla stack to the stack frame, into the array representing the locals. Note that there could be already an object bound to a given local, so we `release()` it before the new assignment.
+
+    case OBJ_TYPE_SYMBOL:
+	/* Quoted symbols don't generate a procedure call, but like
+	 * any other object they get pushed on the stack. */
+	if (o->str.quoted) {
+	    obj *notq = deepCopy(o);
+	    notq->str.quoted = 0;
+	    stackPush(ctx,notq);
+	    break;
+	}
+
+	/* Not quoted symbols get looked up and executed if they
+	 * don't start with "$". Otherwise are handled as locals
+	 * push on the stack. */
+	if (o->str.ptr[0] == '$') {     /* Push local var. */
+	    int idx = o->str.ptr[1];
+	    if (ctx->frame->locals[idx] == NULL) {
+		setError(ctx,o->str.ptr, "Unbound local var");
+		return 1;
+	    }
+	    stackPush(ctx,ctx->frame->locals[idx]);
+	    retain(ctx->frame->locals[idx]);
+
+For symbols, as usually we check if the symbol is quoted, an in such case we just push it on the stack. Otherwise, we handle two different cases. The above is the one where symbol names start with a `$`. It is, basically, the reverse of
+what we saw earlier in tuples capturing local vars. This time the local variable is transferred to the stack. However *we still take the reference* in the local variable array, as the program may want to push the same variable again and again, so, after pushing the object on the stack, we have to call `retain()` to increment the reference count of the object.
+
+If the symbol does not start with `$`, then it's a procedure call:
+
+	} else {                        /* Call procedure. */
+	    proc = lookupProc(ctx,o->str.ptr);
+	    if (proc == NULL) {
+		setError(ctx,o->str.ptr,
+		    "Symbol not bound to procedure");
+		return 1;
+	    }
+	    if (proc->cproc) {
+		/* Call a procedure implemented in C. */
+		aproc *prev = ctx->frame->curproc;
+		ctx->frame->curproc = proc;
+		int err = proc->cproc(ctx);
+		ctx->frame->curproc = prev;
+		if (err) return err;
+	    } else {
+		/* Call a procedure implemented in Aocla. */
+		stackframe *oldsf = ctx->frame;
+		ctx->frame = newStackFrame(ctx);
+		ctx->frame->curproc = proc;
+		int err = eval(ctx,proc->proc);
+		freeStackFrame(ctx->frame);
+		ctx->frame = oldsf;
+		if (err) return err;
+	    }
+	}
+
+The `lookupProc()` function just scans a linked list of procedures
+and returns a list object or, if there is no such procedure defined, NULL.
+Now what happens immediately after is much more interesting. Aocla procedures
+are just list objects, but it is possible to implement Aocla procedures
+directly in C. If the `cproc` is not NULL, then it is a C function pointer
+implementing a procedure, otherwise the procedure is *used defined*, written
+in Aocla, and we need to evaluate it, with a nested `eval()` call.
+As you can see, recursion is crucial in writing interpreters.
+
+Another important thing is that each new Aocla procedure has its own set
+of local variables. The scope of local variables, in Aocla, is the
+lifetime of the procedure call, like in many other languages. So before
+calling al Aocla procedure we allocate a new stack frame with `newStackFrame()`, then we call `eval()`, free the stack frame and store the old one. Procedures implemented in C don't need a stack frame, as they will not make any use of Aocla local variables.
+
+    default:
+	stackPush(ctx,o);
+	retain(o);
+	break;
+
+This is the final, default behavior for all the other objects. They get pushed on the stack, and that's it.
+
+Let's see how Aocla C-coded procedures are implemented, by observing the
+C function implementing basic mathematical operations such as +, -, ...
+
+    /* Implements +, -, *, %, ... */
+    int procBasicMath(aoclactx *ctx) {
+	if (checkStackType(ctx,2,OBJ_TYPE_INT,OBJ_TYPE_INT)) return 1;
+	obj *b = stackPop(ctx);
+	obj *a = stackPop(ctx);
+
+	int res;
+	const char *fname = ctx->frame->curproc->name;
+	if (fname[0] == '+' && fname[1] == 0) res = a->i + b->i;
+	if (fname[0] == '-' && fname[1] == 0) res = a->i - b->i;
+	if (fname[0] == '*' && fname[1] == 0) res = a->i * b->i;
+	if (fname[0] == '/' && fname[1] == 0) res = a->i / b->i;
+	stackPush(ctx,newInt(res));
+	release(a);
+	release(b);
+	return 0;
+    }
+
+Here we cheat: the code to implement each procedure would be almost the same so we check the name of the procedure called, and bind all the operators to the same function:
+
+    void loadLibrary(aoclactx *ctx) {
+	addProc(ctx,"+",procBasicMath,NULL);
+	addProc(ctx,"-",procBasicMath,NULL);
+	addProc(ctx,"*",procBasicMath,NULL);
+	addProc(ctx,"/",procBasicMath,NULL);
+	...
+
+The `procBasicMath()` is quite self-documenting, I guess. The proof of that
+is that I didn't add any comment inside the function. It checks the type
+of the top objects on the stack, as they must be integers. Get them
+with `stackPop()`, perform the math, push a new integer object, release the
+old ones. That's it.
+
+## Deep copy of objects
+
+Well, believe it or not, that's it: you already saw all the most important
+parts of the Aocla interpreter. But there are a few corner cases that
+are forth a few more paragraphs of this README.
+
+Imagine the execution of the following Aocla program:
+
+	[1 2 3] (x)	// The varialbe x contains the list now
+	4 $x ->		// Now the stack contains the list [1 2 3 4]
+	$x		// What will be x now? [1 2 3] or [1 2 3 4]?
+
+Well, Aocla is designed to be kinda a *pure* language: words manipulate
+objects by taking them from the stack and pushing new objects to the
+stack, that result from certain operations. We don't want to expose the
+idea of references in such a language, I feel like that would be a mess,
+a design error, and a programming nightmare. So if the variable `x` is
+bound to the list `[1 2 3]`, pushing it to the stack and adding new
+elements to the list should **not produce changes** to the list stored
+at `x`.
+
+At the same time, we don't want to write an inefficient crap where each
+value is copied again and again. When we push our variable content on
+the stack we just push the pointer and increment the reference count.
+In order to have the best of both world, we want to implement something
+called *copy on write*. So normally our objects can be shared, and thanks
+to the count of references we know if it is shared or not, if losing a
+reference is going to free the object or not. However as soon as some
+operation is going to alter an object whose reference count is greater
+than one, it gets copied first, only later modified.
+
+In the above program, the list reference count is 2, because the same list
+is stored in the array of local variables and in the stack. Let's
+give a look at the implementation of the `->` operator:
+
+    /* Implements -> and <-, appending element x in list with stack
+     *
+     * (x [1 2 3]) => ([1 2 3 x]) | ([x 1 2 3])
+     *
+     * <- is very inefficient as it memmoves all N elements. */
+    int procListAppend(aoclactx *ctx) {
+	int tail = ctx->frame->curproc->name[0] == '-';     /* Append on tail? */
+	if (checkStackType(ctx,2,OBJ_TYPE_ANY,OBJ_TYPE_LIST)) return 1;
+	obj *l = getUnsharedObject(stackPop(ctx));
+	obj *ele = stackPop(ctx);
+	l->l.ele = myrealloc(l->l.ele,sizeof(obj*)*(l->l.len+1));
+	if (tail) {
+	    l->l.ele[l->l.len] = ele;
+	} else {
+	    memmove(l->l.ele+1,l->l.ele,sizeof(obj*)*l->l.len);
+	    l->l.ele[0] = ele;
+	}
+	l->l.len++;
+	stackPush(ctx,l);
+	return 0;
+    }
+
+The interesting like here is the following one:
+
+    obj *l = getUnsharedObject(stackPop(ctx));
+
+We want an object that is not shared, right? This function will abstract
+the work for us. Let's check, in turn, its implementation:
+
+    obj *getUnsharedObject(obj *o) {
+	if (o->refcount > 1) {
+	    release(o);
+	    return deepCopy(o);
+	} else {
+	    return o;
+	}
+    }
+
+So if the object is already unshared (its *refcount* is one), just return it as it is. Otherwise create a copy and remove a reference from the original object. This may look odd, but think at it: the invariant here should be that the caller of this function is the only owner of this object. If we want the caller to be able to abstract totally what happened inside the function, if the object was shared and we returned the caller a copy, the reference the caller had for the old object should be gone. Let's look at the following example:
+
+	obj *o = stackPop(ctx);
+        o = getUnsharedObject(o);
+	doSomethingThatChanges(o);
+	stackPush(ctx,o);
+
+Stack pop and push functions don't change the reference counting of the object,
+so if the object is not shared we get it with a single reference, change it,
+push it on the stack and the object has still a single reference.
+
+Now imagine that, instead, the object is shared and also lives in a
+variable. In this case we pop an object that has two references, call
+`getUnsharedObject() that will return us a copy with a *recount* of one. We
+change the object and push it to the stack. The new object will have a
+single reference on the stack, and has a reference count of one: all is
+fine. What about the old object stored in the local variable? It should
+have a reference count of one as well, but if we don't `release()` it
+in getUnsharedObject() it would have two, causing a memory leak.
+
+I'll not show the `deepCopy()` function, it just allocates a new object of the specified type and copy the content. But guess what? It's a recursive function.
+
+# The end
+
+That's it, and thanks for reading that far. To know more about interpreters you have only one thing to do: write your own, or radically modify Aocla in some crazy ways. Get your hands dirty, it's super fun and rewarding. I can only promise that what you will learn will be worthwhile, even if you'll never write an interpreter again.
