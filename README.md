@@ -629,6 +629,7 @@ It contains the following elements:
 2. A list of procedures: lists bound to symbols, via the `def` word.
 3. A stack frame, that is just what contains our local variables:
 
+
     /* We have local vars, so we need a stack frame. We start with a top level
      * stack frame. Each time a procedure is called, we create a new stack frame
      * and free it once the procedure returns. */
