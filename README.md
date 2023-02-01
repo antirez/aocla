@@ -629,7 +629,7 @@ It contains the following elements:
 2. A list of procedures: lists bound to symbols, via the `def` word.
 3. A stack frame, that is just what contains our local variables:
 
-
+```
     /* We have local vars, so we need a stack frame. We start with a top level
      * stack frame. Each time a procedure is called, we create a new stack frame
      * and free it once the procedure returns. */
@@ -640,6 +640,7 @@ It contains the following elements:
         int curline;               /* Current line number during execution. */
         struct stackframe *prev;   /* Upper level stack frame or NULL. */
     } stackframe;
+```
 
 The stack frame has a pointer to the previous stack frame. This is useful both in order to implement `upeval` and to show a stack trace when an exception happens and the program is halted.
 
