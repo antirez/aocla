@@ -116,10 +116,10 @@ To push an empty list on the stack, you can use:
 
 Then it is possible to add elements to the tail or the head of the list using the `<-` and `->` procedures:
 
-aocla> 1 swap ->
-[1] 
-aocla> 2 swap ->
-[1 2] 
+    aocla> 1 swap ->
+    [1] 
+    aocla> 2 swap ->
+    [1 2] 
 
 Note that these procedures are designed to insert the last element in the
 stack into the list that is the penultimate element in the stack, so,
