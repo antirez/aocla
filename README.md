@@ -88,7 +88,7 @@ When you execute programs from files, in order to debug their executions you can
 
 Aocla programs are just lists, and Aocla functions are lists bound to a
 name. The name is given as a symbol, and the way to bind a list with a
-symbol is an Aocla procedure itself. Not special syntax is required.
+symbol is an Aocla procedure itself. No special syntax is required.
 
     [dup *] 'square def
 
