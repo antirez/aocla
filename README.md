@@ -889,3 +889,24 @@ I'll not show the `deepCopy()` function, it just allocates a new object of the s
 # The end
 
 That's it, and thanks for reading that far. To know more about interpreters you have only one thing to do: write your own, or radically modify Aocla in some crazy way. Get your hands dirty, it's super fun and rewarding. I can only promise that what you will learn will be worthwhile, even if you'll never write an interpreter again.
+
+## Appendix: Aocla locals and Fibonacci
+
+I believe the Fibonacci implementation written in Aocla, versus the implementation written in other stack-based languages, is quite telling about the jump forward in readability and usability provided by this simple feature:
+
+    [(n)
+        [$n 1 <=]
+        [
+            $n
+        ]
+        [
+            $n 1 - fib
+            $n 2 - fib
+            +
+        ] ifelse
+    ] 'fib def
+
+    10 fib
+    printnl
+
+So, while Aocla is a toy language, I believe this feature should be looked more carefully by actual stack-based language designers.
